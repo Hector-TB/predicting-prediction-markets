@@ -1,0 +1,309 @@
+"""
+Step 1: Fetch and Filter Markets
+==================================
+Fetches resolved binary markets from Polymarket Gamma API,
+applies filters, and saves a clean market metadata file.
+
+Output: polymarket_markets_meta.csv
+
+Run this first, then run build_snapshots.py
+"""
+
+import requests
+import pandas as pd
+import numpy as np
+import json
+import time
+from typing import Optional
+
+# ─────────────────────────────────────────────
+# CONFIG
+# ─────────────────────────────────────────────
+
+GAMMA_URL = "https://gamma-api.polymarket.com"
+
+# Server-side API filters
+MARKET_FETCH_LIMIT  = 500
+MAX_MARKETS         = None          # None = fetch all
+VOLUME_NUM_MIN      = 1_000         # eliminates intraday/thin markets
+START_DATE_MIN      = "2023-01-01"  # CLOB era only
+
+# Client-side filters
+MIN_DURATION_DAYS   = 30            # no upper bound
+OUTCOME_THRESHOLD   = 0.95          # outcomePrices[0] >= this → YES, <= 0.05 → NO
+
+SLEEP_BETWEEN_CALLS = 0.15
+MAX_RETRIES         = 5         # retries per offset on server error
+RETRY_BACKOFF       = 5         # seconds to wait before first retry (doubles each attempt)
+
+OUTPUT_META         = "polymarket_markets_meta.csv"
+
+
+# ─────────────────────────────────────────────
+# HELPERS
+# ─────────────────────────────────────────────
+
+def parse_json_field(value, default=None):
+    if value is None:
+        return default
+    if isinstance(value, (list, dict)):
+        return value
+    try:
+        return json.loads(value)
+    except:
+        return default
+
+def parse_dt(value) -> Optional[pd.Timestamp]:
+    if not value:
+        return None
+    try:
+        ts = pd.to_datetime(value, utc=True)
+        return ts if not pd.isna(ts) else None
+    except:
+        return None
+
+
+# ─────────────────────────────────────────────
+# FETCH
+# ─────────────────────────────────────────────
+
+def fetch_all_markets() -> list[dict]:
+    print("=" * 60)
+    print("STEP 1: Fetching markets from Gamma API")
+    print("=" * 60)
+    print(f"  volume_num_min : {VOLUME_NUM_MIN:,}")
+    print(f"  start_date_min : {START_DATE_MIN}\n")
+
+    all_markets = []
+    offset = 0
+    consecutive_failures = 0
+    MAX_CONSECUTIVE_FAILURES = 3
+
+    while True:
+        params = {
+            "closed":         "true",
+            "limit":          MARKET_FETCH_LIMIT,
+            "offset":         offset,
+            "order":          "startDate",
+            "ascending":      "true",
+            "volume_num_min": VOLUME_NUM_MIN,
+            "start_date_min": START_DATE_MIN,
+        }
+
+        batch = None
+        for attempt in range(1, MAX_RETRIES + 1):
+            try:
+                r = requests.get(f"{GAMMA_URL}/markets", params=params, timeout=20)
+                r.raise_for_status()
+                batch = r.json()
+                break
+            except Exception as e:
+                wait = RETRY_BACKOFF * (2 ** (attempt - 1))
+                if attempt < MAX_RETRIES:
+                    print(f"  Error at offset {offset} (attempt {attempt}/{MAX_RETRIES}): {e} "
+                          f"— retrying in {wait}s")
+                    time.sleep(wait)
+                else:
+                    print(f"  Error at offset {offset} (attempt {attempt}/{MAX_RETRIES}): {e} "
+                          f"— skipping offset.")
+
+        if batch is None:
+            consecutive_failures += 1
+            if consecutive_failures >= MAX_CONSECUTIVE_FAILURES:
+                print(f"  {consecutive_failures} consecutive batch failures — stopping fetch.")
+                break
+            offset += MARKET_FETCH_LIMIT
+            continue
+
+        consecutive_failures = 0  # reset on success
+
+        if not batch:
+            print(f"  Empty batch at offset {offset} — done.")
+            break
+
+        all_markets.extend(batch)
+
+        oldest = batch[0].get("startDate", "?")[:10]
+        newest = batch[-1].get("startDate", "?")[:10]
+        print(f"  offset {offset:>6} | batch {len(batch):>4} | "
+              f"dates {oldest} → {newest} | total {len(all_markets):>6}")
+
+        if MAX_MARKETS and len(all_markets) >= MAX_MARKETS:
+            all_markets = all_markets[:MAX_MARKETS]
+            print(f"  Hit MAX_MARKETS cap ({MAX_MARKETS}).")
+            break
+
+        offset += MARKET_FETCH_LIMIT
+        time.sleep(SLEEP_BETWEEN_CALLS)
+
+    print(f"\nTotal markets fetched: {len(all_markets):,}")
+    return all_markets
+
+
+# ─────────────────────────────────────────────
+# FILTER AND PARSE
+# ─────────────────────────────────────────────
+
+CATEGORY_KEYWORDS = {
+    "politics":    ["election", "president", "senate", "congress", "vote", "poll",
+                    "democrat", "republican", "trump", "biden", "harris", "governor",
+                    "primary", "ballot", "candidate"],
+    "crypto":      ["bitcoin", "btc", "ethereum", "eth", "crypto", "token", "defi",
+                    "solana", "nft", "blockchain", "coinbase", "binance"],
+    "sports":      ["nfl", "nba", "mlb", "nhl", "soccer", "football", "basketball",
+                    "baseball", "tennis", "championship", "super bowl", "world cup",
+                    "playoff", "tournament"],
+    "finance":     ["fed", "interest rate", "gdp", "inflation", "stock", "ipo",
+                    "earnings", "recession", "s&p", "nasdaq", "dow"],
+    "geopolitics": ["war", "ukraine", "russia", "china", "taiwan", "nato", "nuclear",
+                    "sanctions", "israel", "middle east", "conflict", "ceasefire"],
+    "science_tech":["nasa", "spacex", "ai", "gpt", "climate", "vaccine", "fda",
+                    "drug", "trial", "approval", "launch"],
+}
+
+def infer_category(question: str, existing: str) -> str:
+    if existing and existing.strip().lower() not in ("", "none", "null", "other"):
+        return existing.strip().lower().replace(" ", "_")
+    q = question.lower()
+    for cat, keywords in CATEGORY_KEYWORDS.items():
+        if any(kw in q for kw in keywords):
+            return cat
+    return "other"
+
+
+def parse_and_filter_markets(raw_markets: list[dict]) -> pd.DataFrame:
+    print("\n" + "=" * 60)
+    print("STEP 2: Parsing and filtering markets")
+    print("=" * 60)
+
+    records = []
+    skipped = {
+        "not_binary":        0,
+        "bad_dates":         0,
+        "negative_duration": 0,
+        "too_short":         0,
+        "no_outcome_field":  0,
+        "ambiguous_outcome": 0,
+        "no_clob_token":     0,
+    }
+
+    for m in raw_markets:
+
+        # Binary check
+        outcomes = parse_json_field(m.get("outcomes"), [])
+        if len(outcomes) != 2:
+            skipped["not_binary"] += 1
+            continue
+
+        # Dates
+        start = parse_dt(m.get("createdAt"))
+        end   = parse_dt(m.get("endDate"))
+        if start is None or end is None:
+            skipped["bad_dates"] += 1
+            continue
+
+        duration_days = (end - start).days
+        if duration_days <= 0:
+            skipped["negative_duration"] += 1
+            continue
+        if duration_days < MIN_DURATION_DAYS:
+            skipped["too_short"] += 1
+            continue
+
+        # Outcome
+        op = parse_json_field(m.get("outcomePrices"), [])
+        if not op or len(op) < 2:
+            skipped["no_outcome_field"] += 1
+            continue
+        try:
+            yes_price = float(op[0])
+        except:
+            skipped["no_outcome_field"] += 1
+            continue
+
+        if yes_price >= OUTCOME_THRESHOLD:
+            outcome = 1
+        elif yes_price <= (1 - OUTCOME_THRESHOLD):
+            outcome = 0
+        else:
+            skipped["ambiguous_outcome"] += 1
+            continue
+
+        # CLOB token
+        clob_tokens = parse_json_field(m.get("clobTokenIds"), [])
+        if not clob_tokens:
+            skipped["no_clob_token"] += 1
+            continue
+
+        records.append({
+            "market_id":       m.get("conditionId") or str(m.get("id")),
+            "clob_token_id":   clob_tokens[0],
+            "question":        m.get("question", ""),
+            "category":        m.get("category", ""),
+            "start_date":      start,
+            "end_date":        end,
+            "duration_days":   duration_days,
+            "total_volume":    float(m.get("volumeNum") or 0),
+            "yes_final_price": round(yes_price, 6),
+            "outcome":         outcome,
+        })
+
+    df = pd.DataFrame(records)
+
+    print(f"\nFilter results:")
+    print(f"  Input:                        {len(raw_markets):>7,}")
+    for reason, count in skipped.items():
+        print(f"  Skipped ({reason:<24}): {count:>6,}")
+    print(f"  {'Passing markets':<32}: {len(df):>6,}")
+
+    if len(df) > 0:
+        print(f"\n  Outcome:  YES={df['outcome'].mean():.1%}  NO={(1-df['outcome'].mean()):.1%}")
+        print(f"  Duration: min={df['duration_days'].min()}d  "
+              f"median={df['duration_days'].median():.0f}d  "
+              f"max={df['duration_days'].max()}d")
+        print(f"  Dates:    {df['start_date'].min().date()} → {df['start_date'].max().date()}")
+        print(f"  Volume:   min=${df['total_volume'].min():,.0f}  "
+              f"median=${df['total_volume'].median():,.0f}  "
+              f"max=${df['total_volume'].max():,.0f}")
+
+    return df
+
+
+# ─────────────────────────────────────────────
+# MAIN
+# ─────────────────────────────────────────────
+
+def main():
+    print("\n" + "█" * 60)
+    print("  POLYMARKET — FETCH & FILTER MARKETS")
+    print("█" * 60 + "\n")
+
+    raw_markets = fetch_all_markets()
+
+    markets_df = parse_and_filter_markets(raw_markets)
+    if markets_df.empty:
+        print("No markets passed filters. Exiting.")
+        return
+
+    # Enrich category
+    markets_df["category"] = markets_df.apply(
+        lambda r: infer_category(r["question"], r["category"]), axis=1
+    )
+
+    # Market-level train/test split (80/20)
+    np.random.seed(42)
+    markets_df = markets_df.sample(frac=1, random_state=42).reset_index(drop=True)
+    n = len(markets_df)
+    markets_df["split"] = ["train"] * int(n * 0.8) + ["test"] * (n - int(n * 0.8))
+
+    # Save — include clob_token_id so build_snapshots.py can use it
+    markets_df.to_csv(OUTPUT_META, index=False)
+
+    print(f"\nSaved: {OUTPUT_META}")
+    print(f"  Markets: {len(markets_df):,}")
+    print(f"  Columns: {list(markets_df.columns)}")
+    print(f"\nNext: run build_snapshots.py")
+
+
+if __name__ == "__main__":
+    main()
