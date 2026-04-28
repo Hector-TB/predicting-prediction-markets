@@ -1,12 +1,12 @@
 """
-Step 1: Fetch and Filter Markets
-==================================
-Fetches resolved binary markets from Polymarket Gamma API,
-applies filters, and saves a clean market metadata file.
+Step 1b: Incremental Market Update
+=====================================
+Reads the most recent start_date from polymarket_markets_meta.csv
+and fetches only markets created after that date.
+Appends new markets to the existing CSV without touching old ones.
 
-Output: polymarket_markets_meta.csv
-
-Run this first, then run build_snapshots.py
+Run after fetch_markets.py has been run at least once.
+Then run build_snapshots.py to fetch price history for the new markets.
 """
 
 import requests
@@ -14,6 +14,7 @@ import pandas as pd
 import numpy as np
 import json
 import time
+import os
 from typing import Optional
 
 # ─────────────────────────────────────────────
@@ -22,25 +23,20 @@ from typing import Optional
 
 GAMMA_URL = "https://gamma-api.polymarket.com"
 
-# Server-side API filters
 MARKET_FETCH_LIMIT  = 500
-MAX_MARKETS         = None          # None = fetch all
-VOLUME_NUM_MIN      = 1_000         # eliminates intraday/thin markets
-START_DATE_MIN      = "2023-01-01"  # CLOB era only
-
-# Client-side filters
-MIN_DURATION_DAYS   = 30            # no upper bound
-OUTCOME_THRESHOLD   = 0.95          # outcomePrices[0] >= this → YES, <= 0.05 → NO
-
+MAX_MARKETS         = None
+VOLUME_NUM_MIN      = 1_000
+MIN_DURATION_DAYS   = 30
+OUTCOME_THRESHOLD   = 0.95
 SLEEP_BETWEEN_CALLS = 0.15
-MAX_RETRIES         = 5         # retries per offset on server error
-RETRY_BACKOFF       = 5         # seconds to wait before first retry (doubles each attempt)
+MAX_RETRIES         = 5
+RETRY_BACKOFF       = 5
 
 OUTPUT_META         = "polymarket_markets_meta.csv"
 
 
 # ─────────────────────────────────────────────
-# HELPERS
+# HELPERS (shared with fetch_markets.py)
 # ─────────────────────────────────────────────
 
 def parse_json_field(value, default=None):
@@ -64,15 +60,40 @@ def parse_dt(value) -> Optional[pd.Timestamp]:
 
 
 # ─────────────────────────────────────────────
-# FETCH
+# GET CUTOFF DATE FROM EXISTING CSV
 # ─────────────────────────────────────────────
 
-def fetch_all_markets() -> list[dict]:
+def get_cutoff_date() -> str:
+    """
+    Read the most recent start_date from the existing meta CSV.
+    Returns it as a date string (YYYY-MM-DD) to use as start_date_min.
+    """
+    if not os.path.exists(OUTPUT_META):
+        print(f"ERROR: {OUTPUT_META} not found. Run fetch_markets.py first.")
+        return None
+
+    existing = pd.read_csv(OUTPUT_META, usecols=["market_id", "start_date"])
+    existing["start_date"] = pd.to_datetime(existing["start_date"], format="ISO8601", utc=True)
+    cutoff = existing["start_date"].max()
+    cutoff_str = cutoff.strftime("%Y-%m-%d")
+
+    print(f"  Existing markets: {len(existing):,}")
+    print(f"  Most recent start_date: {cutoff_str}")
+    print(f"  Fetching markets created after: {cutoff_str}")
+
+    return cutoff_str, set(existing["market_id"].unique())
+
+
+# ─────────────────────────────────────────────
+# FETCH NEW MARKETS
+# ─────────────────────────────────────────────
+
+def fetch_new_markets(start_date_min: str) -> list[dict]:
+    print("\n" + "=" * 60)
+    print("Fetching new markets from Gamma API")
     print("=" * 60)
-    print("STEP 1: Fetching markets from Gamma API")
-    print("=" * 60)
-    print(f"  volume_num_min : {VOLUME_NUM_MIN:,}")
-    print(f"  start_date_min : {START_DATE_MIN}\n")
+    print(f"  start_date_min : {start_date_min}")
+    print(f"  volume_num_min : {VOLUME_NUM_MIN:,}\n")
 
     all_markets = []
     offset = 0
@@ -87,7 +108,7 @@ def fetch_all_markets() -> list[dict]:
             "order":          "startDate",
             "ascending":      "true",
             "volume_num_min": VOLUME_NUM_MIN,
-            "start_date_min": START_DATE_MIN,
+            "start_date_min": start_date_min,
         }
 
         batch = None
@@ -110,12 +131,12 @@ def fetch_all_markets() -> list[dict]:
         if batch is None:
             consecutive_failures += 1
             if consecutive_failures >= MAX_CONSECUTIVE_FAILURES:
-                print(f"  {consecutive_failures} consecutive batch failures — stopping fetch.")
+                print(f"  {consecutive_failures} consecutive failures — stopping.")
                 break
             offset += MARKET_FETCH_LIMIT
             continue
 
-        consecutive_failures = 0  # reset on success
+        consecutive_failures = 0
 
         if not batch:
             print(f"  Empty batch at offset {offset} — done.")
@@ -130,28 +151,28 @@ def fetch_all_markets() -> list[dict]:
 
         if MAX_MARKETS and len(all_markets) >= MAX_MARKETS:
             all_markets = all_markets[:MAX_MARKETS]
-            print(f"  Hit MAX_MARKETS cap ({MAX_MARKETS}).")
             break
 
         offset += MARKET_FETCH_LIMIT
         time.sleep(SLEEP_BETWEEN_CALLS)
 
-    print(f"\nTotal markets fetched: {len(all_markets):,}")
+    print(f"\nTotal fetched: {len(all_markets):,}")
     return all_markets
 
 
 # ─────────────────────────────────────────────
-# FILTER AND PARSE
+# PARSE AND FILTER
 # ─────────────────────────────────────────────
 
-
-def parse_and_filter_markets(raw_markets: list[dict]) -> pd.DataFrame:
+def parse_and_filter_markets(raw_markets: list[dict],
+                              existing_ids: set) -> pd.DataFrame:
     print("\n" + "=" * 60)
-    print("STEP 2: Parsing and filtering markets")
+    print("Parsing and filtering new markets")
     print("=" * 60)
 
     records = []
     skipped = {
+        "already_exists":    0,
         "not_binary":        0,
         "bad_dates":         0,
         "negative_duration": 0,
@@ -162,6 +183,12 @@ def parse_and_filter_markets(raw_markets: list[dict]) -> pd.DataFrame:
     }
 
     for m in raw_markets:
+
+        # Skip if already in existing CSV
+        market_id = m.get("conditionId") or str(m.get("id"))
+        if market_id in existing_ids:
+            skipped["already_exists"] += 1
+            continue
 
         # Binary check
         outcomes = parse_json_field(m.get("outcomes"), [])
@@ -210,7 +237,7 @@ def parse_and_filter_markets(raw_markets: list[dict]) -> pd.DataFrame:
             continue
 
         records.append({
-            "market_id":       m.get("conditionId") or str(m.get("id")),
+            "market_id":       market_id,
             "clob_token_id":   clob_tokens[0],
             "question":        m.get("question", ""),
             "category":        m.get("category", ""),
@@ -228,7 +255,7 @@ def parse_and_filter_markets(raw_markets: list[dict]) -> pd.DataFrame:
     print(f"  Input:                        {len(raw_markets):>7,}")
     for reason, count in skipped.items():
         print(f"  Skipped ({reason:<24}): {count:>6,}")
-    print(f"  {'Passing markets':<32}: {len(df):>6,}")
+    print(f"  {'New passing markets':<32}: {len(df):>6,}")
 
     if len(df) > 0:
         print(f"\n  Outcome:  YES={df['outcome'].mean():.1%}  NO={(1-df['outcome'].mean()):.1%}")
@@ -236,9 +263,6 @@ def parse_and_filter_markets(raw_markets: list[dict]) -> pd.DataFrame:
               f"median={df['duration_days'].median():.0f}d  "
               f"max={df['duration_days'].max()}d")
         print(f"  Dates:    {df['start_date'].min().date()} → {df['start_date'].max().date()}")
-        print(f"  Volume:   min=${df['total_volume'].min():,.0f}  "
-              f"median=${df['total_volume'].median():,.0f}  "
-              f"max=${df['total_volume'].max():,.0f}")
 
     return df
 
@@ -249,29 +273,39 @@ def parse_and_filter_markets(raw_markets: list[dict]) -> pd.DataFrame:
 
 def main():
     print("\n" + "█" * 60)
-    print("  POLYMARKET — FETCH & FILTER MARKETS")
+    print("  POLYMARKET — INCREMENTAL MARKET UPDATE")
     print("█" * 60 + "\n")
 
-    raw_markets = fetch_all_markets()
+    # Get cutoff date and existing IDs from CSV
+    result = get_cutoff_date()
+    if result is None:
+        return
+    cutoff_str, existing_ids = result
 
-    markets_df = parse_and_filter_markets(raw_markets)
-    if markets_df.empty:
-        print("No markets passed filters. Exiting.")
+    # Fetch new markets
+    raw_markets = fetch_new_markets(cutoff_str)
+    if not raw_markets:
+        print("No new markets fetched.")
         return
 
-    # Market-level train/test split (80/20)
-    np.random.seed(42)
-    markets_df = markets_df.sample(frac=1, random_state=42).reset_index(drop=True)
-    n = len(markets_df)
-    markets_df["split"] = ["train"] * int(n * 0.8) + ["test"] * (n - int(n * 0.8))
+    # Filter — skip already existing market IDs
+    new_df = parse_and_filter_markets(raw_markets, existing_ids)
+    if new_df.empty:
+        print("\nNo new markets to add.")
+        return
 
-    # Save — include clob_token_id so build_snapshots.py can use it
-    markets_df.to_csv(OUTPUT_META, index=False)
+    # Assign split — new markets get random assignment consistent with 80/20
+    np.random.seed(None)  # no fixed seed for incremental updates
+    new_df["split"] = np.where(
+        np.random.rand(len(new_df)) < 0.8, "train", "test"
+    )
 
-    print(f"\nSaved: {OUTPUT_META}")
-    print(f"  Markets: {len(markets_df):,}")
-    print(f"  Columns: {list(markets_df.columns)}")
-    print(f"\nNext: run build_snapshots.py")
+    # Append to existing CSV
+    new_df.to_csv(OUTPUT_META, mode="a", header=False, index=False)
+
+    print(f"\nAppended {len(new_df):,} new markets to {OUTPUT_META}")
+    print(f"  Total markets now: {len(existing_ids) + len(new_df):,}")
+    print(f"\nNext: run build_snapshots.py to fetch price history for new markets")
 
 
 if __name__ == "__main__":
