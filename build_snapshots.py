@@ -13,7 +13,6 @@ Run fetch_markets.py first.
 import requests
 import pandas as pd
 import numpy as np
-import json
 import time
 import os
 from datetime import timedelta
@@ -35,7 +34,6 @@ SLEEP_BETWEEN_CALLS = 0.15
 
 INPUT_META          = "polymarket_markets_meta.csv"
 OUTPUT_DATASET      = "polymarket_ml_dataset.csv"
-CHECKPOINT_FILE     = "polymarket_checkpoint.json"
 
 
 # ─────────────────────────────────────────────
@@ -50,7 +48,7 @@ def fetch_price_history(clob_token_id: str) -> Optional[pd.DataFrame]:
     try:
         r = requests.get(
             f"{CLOB_URL}/prices-history",
-            params={"market": clob_token_id, "interval": "1h", "fidelity": 60},
+            params={"market": clob_token_id, "interval": "max", "fidelity": 720},
             timeout=20,
         )
         r.raise_for_status()
@@ -153,18 +151,17 @@ def compute_snapshots(market: pd.Series, price_df: pd.DataFrame) -> Optional[pd.
 
 
 # ─────────────────────────────────────────────
-# CHECKPOINT HELPERS
+# HELPERS
 # ─────────────────────────────────────────────
 
-def load_checkpoint() -> set:
-    if os.path.exists(CHECKPOINT_FILE):
-        with open(CHECKPOINT_FILE) as f:
-            return set(json.load(f))
+def load_processed_ids() -> set:
+    """Resume support — read already-processed market IDs from existing CSV."""
+    if os.path.exists(OUTPUT_DATASET):
+        existing = pd.read_csv(OUTPUT_DATASET, usecols=["market_id"])
+        ids = set(existing["market_id"].unique())
+        print(f"  Resuming — found {len(ids):,} already-processed markets in {OUTPUT_DATASET}")
+        return ids
     return set()
-
-def save_checkpoint(processed_ids: set):
-    with open(CHECKPOINT_FILE, "w") as f:
-        json.dump(list(processed_ids), f)
 
 def append_to_dataset(snap_df: pd.DataFrame, first_write: bool):
     snap_df.to_csv(OUTPUT_DATASET, mode="a", header=first_write, index=False)
@@ -184,9 +181,9 @@ def main():
         print(f"ERROR: {INPUT_META} not found. Run fetch_markets.py first.")
         return
 
-    markets_df = pd.read_csv(INPUT_META, parse_dates=["start_date", "end_date"])
-    markets_df["start_date"] = pd.to_datetime(markets_df["start_date"], utc=True)
-    markets_df["end_date"]   = pd.to_datetime(markets_df["end_date"], utc=True)
+    markets_df = pd.read_csv(INPUT_META)
+    markets_df["start_date"] = pd.to_datetime(markets_df["start_date"], format="ISO8601", utc=True)
+    markets_df["end_date"]   = pd.to_datetime(markets_df["end_date"], format="ISO8601", utc=True)
 
     print(f"Loaded {len(markets_df):,} markets from {INPUT_META}")
     print(f"  Outcome: YES={markets_df['outcome'].mean():.1%} | "
@@ -199,22 +196,31 @@ def main():
     print("Fetching price history + computing snapshots")
     print("=" * 60)
 
-    processed_ids  = load_checkpoint()
+    processed_ids  = load_processed_ids()
     n_markets      = len(markets_df)
-    n_success      = 0
-    n_no_history   = 0
-    n_no_snapshots = 0
-    total_rows     = 0
     first_write    = not os.path.exists(OUTPUT_DATASET)
 
-    for i, (_, market) in enumerate(markets_df.iterrows()):
+    # Initialise counters from existing CSV if resuming
+    if not first_write:
+        existing = pd.read_csv(OUTPUT_DATASET, usecols=["market_id", "outcome"])
+        n_success  = existing["market_id"].nunique()
+        total_rows = len(existing)
+    else:
+        n_success  = 0
+        total_rows = 0
+
+    n_no_history   = 0
+    n_no_snapshots = 0
+
+    remaining_df = markets_df[~markets_df["market_id"].isin(processed_ids)].reset_index(drop=True)
+    n_remaining  = len(remaining_df)
+    print(f"  {len(processed_ids):,} already done, {n_remaining:,} remaining\n")
+
+    for i, (_, market) in enumerate(remaining_df.iterrows()):
         market_id = market["market_id"]
 
-        if market_id in processed_ids:
-            continue
-
         if i % 50 == 0:
-            print(f"  [{i/n_markets*100:5.1f}%] {i}/{n_markets} | "
+            print(f"  [{i/n_remaining*100:5.1f}%] {i}/{n_remaining} remaining | "
                   f"ok={n_success} no_hist={n_no_history} "
                   f"no_snap={n_no_snapshots} rows={total_rows:,}")
 
@@ -243,10 +249,7 @@ def main():
         n_success  += 1
         processed_ids.add(market_id)
 
-        if i % 100 == 0:
-            save_checkpoint(processed_ids)
 
-    save_checkpoint(processed_ids)
 
     print(f"\n{'=' * 60}")
     print(f"  COMPLETE")
