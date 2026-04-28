@@ -267,11 +267,13 @@ def main():
         print("No markets passed filters. Exiting.")
         return
 
-    # Market-level train/test split (80/20)
-    np.random.seed(42)
-    markets_df = markets_df.sample(frac=1, random_state=42).reset_index(drop=True)
+    # Temporal train/test split (80/20) — oldest 80% train, newest 20% test
+    markets_df = markets_df.sort_values("start_date").reset_index(drop=True)
     n = len(markets_df)
-    markets_df["split"] = ["train"] * int(n * 0.8) + ["test"] * (n - int(n * 0.8))
+    cutoff_idx  = int(n * 0.8)
+    cutoff_date = markets_df.iloc[cutoff_idx]["start_date"]
+    markets_df["split"] = ["train"] * cutoff_idx + ["test"] * (n - cutoff_idx)
+    print(f"  Split cutoff: {cutoff_date.date()} — train={cutoff_idx:,}  test={n-cutoff_idx:,}")
 
     # Save — include clob_token_id so build_snapshots.py can use it
     markets_df.to_csv(OUTPUT_META, index=False)
