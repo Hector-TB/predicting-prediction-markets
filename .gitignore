@@ -1,8 +1,29 @@
 # Data files
 *.csv
+*.parquet
 
 # Notebooks
 testing.ipynb
+.ipynb_checkpoints/
 
-# Checkpoints
-*.json
+# Model artifacts (large binaries)
+models/*/artifacts/*.pkl
+models/*/artifacts/*.joblib
+models/*/artifacts/*.txt
+models/*/artifacts/*.bin
+
+# Predictions (large CSVs)
+models/*/predictions/*.csv
+
+# Results JSON (keep these — small and useful to share)
+# models/*/results/*.json  ← intentionally NOT ignored
+
+# Python
+__pycache__/
+*.pyc
+
+# macOS
+.DS_Store
+
+# EDA
+eda.ipynb
