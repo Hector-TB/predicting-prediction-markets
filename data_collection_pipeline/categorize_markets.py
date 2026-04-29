@@ -23,7 +23,6 @@ import anthropic
 import pandas as pd
 import json
 import time
-import os
 from pathlib import Path
 from typing import Optional
 
@@ -39,7 +38,7 @@ DATA_DIR    = ROOT / "data"
 # ─────────────────────────────────────────────
 
 META_CSV            = DATA_DIR / "polymarket_markets_meta.csv"
-DATASET_CSV         = DATA_DIR / "polymarket_ml_dataset.csv"
+DATASET_PARQUET     = DATA_DIR / "polymarket_ml_dataset.parquet"
 
 BATCH_SIZE          = 100       # questions per API call
 SLEEP_BETWEEN_CALLS = 0.5       # seconds between batches
@@ -69,8 +68,8 @@ SYSTEM_PROMPT = """You are a classification assistant. You will be given a list 
 - entertainment: Celebrity, TV shows, music, film, awards, pop culture, social media
 - other: Anything that doesn't clearly fit the above
 
-You will receive a JSON array of objects with "id" and "question" fields.
-Respond with ONLY a JSON array of objects with "id" and "category" fields.
+You will receive a JSON array of question strings.
+Respond with ONLY a JSON array of category strings, in the same order.
 No preamble, no explanation, no markdown — just the raw JSON array."""
 
 
@@ -79,19 +78,23 @@ No preamble, no explanation, no markdown — just the raw JSON array."""
 # ─────────────────────────────────────────────
 
 def classify_batch(client: anthropic.Anthropic,
-                   batch: list[dict]) -> Optional[dict[str, str]]:
+                   batch: list[dict]) -> Optional[list[str]]:
     """
-    Send a batch of {id, question} dicts to Claude.
-    Returns a dict mapping market_id -> category.
+    Send a batch of questions to Claude.
+    Returns a list of category strings in the same order as batch.
     """
-    payload = json.dumps([{"id": m["id"], "question": m["question"]} for m in batch])
+    payload = json.dumps([m["question"] for m in batch])
 
     for attempt in range(1, MAX_RETRIES + 1):
         try:
             message = client.messages.create(
-                model="claude-sonnet-4-20250514",
-                max_tokens=1024,
-                system=SYSTEM_PROMPT,
+                model="claude-haiku-4-5",
+                max_tokens=4096,
+                system=[{
+                    "type": "text",
+                    "text": SYSTEM_PROMPT,
+                    "cache_control": {"type": "ephemeral"},
+                }],
                 messages=[{"role": "user", "content": payload}],
             )
             raw = message.content[0].text.strip()
@@ -101,17 +104,16 @@ def classify_batch(client: anthropic.Anthropic,
                 raw = raw.split("\n", 1)[1].rsplit("```", 1)[0].strip()
 
             results = json.loads(raw)
-
-            # Validate and build mapping
-            mapping = {}
-            for r in results:
-                mid = str(r.get("id", ""))
-                cat = r.get("category", "other").strip().lower()
-                if cat not in VALID_CATEGORIES:
-                    cat = "other"
-                mapping[mid] = cat
-
-            return mapping
+            cats = [
+                r.strip().lower() if r.strip().lower() in VALID_CATEGORIES else "other"
+                for r in results
+            ]
+            # Truncate if too long, pad with "other" if too short
+            if len(cats) != len(batch):
+                print(f"(count mismatch: got {len(cats)}, expected {len(batch)} — adjusting) ",
+                      end="")
+                cats = (cats + ["other"] * len(batch))[:len(batch)]
+            return cats
 
         except Exception as e:
             wait = 2 ** attempt
@@ -163,35 +165,32 @@ def main():
             for _, row in needs_category.iterrows()
         ]
 
-        n_batches   = (len(records) + BATCH_SIZE - 1) // BATCH_SIZE
-        all_mapping = {}
+        n_batches    = (len(records) + BATCH_SIZE - 1) // BATCH_SIZE
+        all_categories = ["other"] * len(records)  # positional, same order as records
 
         print(f"\nClassifying in {n_batches} batches of {BATCH_SIZE}...\n")
 
         for b in range(n_batches):
-            batch  = records[b * BATCH_SIZE : (b + 1) * BATCH_SIZE]
+            start  = b * BATCH_SIZE
+            batch  = records[start : start + BATCH_SIZE]
             pct    = (b + 1) / n_batches * 100
             print(f"  [{pct:5.1f}%] Batch {b+1}/{n_batches} ({len(batch)} markets)...",
                   end=" ", flush=True)
 
-            mapping = classify_batch(client, batch)
+            categories = classify_batch(client, batch)
 
-            if mapping:
-                all_mapping.update(mapping)
-                # Count category distribution in this batch
-                cats = list(mapping.values())
-                print(f"ok — {len(mapping)} classified")
+            if categories:
+                all_categories[start : start + len(batch)] = categories
+                print(f"ok — {len(categories)} classified")
             else:
-                # Fallback: assign "other" for failed batches
-                for r in batch:
-                    all_mapping[r["id"]] = "other"
                 print("failed — assigned 'other'")
 
             time.sleep(SLEEP_BETWEEN_CALLS)
 
         # ── Apply to meta ──────────────────────
+        id_to_category = {r["id"]: cat for r, cat in zip(records, all_categories)}
         meta["category"] = meta.apply(
-            lambda row: all_mapping.get(str(row["market_id"]), row["category"])
+            lambda row: id_to_category.get(str(row["market_id"]), row["category"])
             if pd.isna(row["category"]) or str(row["category"]).strip().lower() in ("other", "")
             else row["category"],
             axis=1
@@ -208,36 +207,23 @@ def main():
     meta.to_csv(META_CSV, index=False)
     print(f"\nSaved updated categories to {META_CSV}")
 
-    # ── Update dataset CSV ────────────────────
-    if not DATASET_CSV.exists():
-        print(f"\n{DATASET_CSV} not found — skipping dataset update.")
+    # ── Update dataset parquet ────────────────
+    if not DATASET_PARQUET.exists():
+        print(f"\n{DATASET_PARQUET} not found — skipping dataset update.")
         return
 
-    print(f"\nUpdating categories in {DATASET_CSV}...")
+    print(f"\nUpdating categories in {DATASET_PARQUET}...")
 
     # Build market_id -> category mapping from updated meta
     cat_map = dict(zip(meta["market_id"].astype(str),
                        meta["category"].astype(str)))
 
-    # Read dataset in chunks to handle large files
-    chunk_size  = 100_000
-    chunks      = []
-    first_write = True
-    tmp_path    = DATA_DIR / (DATASET_CSV.name + ".tmp")
-
-    reader = pd.read_csv(DATASET_CSV, chunksize=chunk_size)
-    total_rows = 0
-
-    for chunk in reader:
-        chunk["category"] = chunk["market_id"].astype(str).map(cat_map).fillna("other")
-        chunk.to_csv(tmp_path, mode="a", header=first_write, index=False)
-        first_write  = False
-        total_rows  += len(chunk)
-        print(f"  Processed {total_rows:,} rows...", end="\r")
-
-    # Replace original with updated
-    os.replace(tmp_path, DATASET_CSV)
-    print(f"\nSaved updated categories to {DATASET_CSV} ({total_rows:,} rows)")
+    df = pd.read_parquet(DATASET_PARQUET)
+    df["category"] = df["market_id"].astype(str).map(cat_map).fillna("other")
+    tmp_path = DATASET_PARQUET.with_suffix(".tmp.parquet")
+    df.to_parquet(tmp_path, index=False)
+    tmp_path.replace(DATASET_PARQUET)
+    print(f"Saved updated categories to {DATASET_PARQUET} ({len(df):,} rows)")
 
     print(f"\n{'=' * 60}")
     print(f"  COMPLETE")
