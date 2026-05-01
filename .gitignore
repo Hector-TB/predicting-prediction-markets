@@ -1,6 +1,8 @@
 # Data files
 *.csv
-*.parquet
+# Parquet files are tracked (shared via git)
+# Unsplit version is too large for GitHub — use the part1/part2 files instead
+data/polymarket_ml_dataset_with_trends.parquet
 
 # Notebooks
 testing.ipynb
