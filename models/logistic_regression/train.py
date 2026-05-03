@@ -2,8 +2,6 @@ import pathlib
 import joblib
 import numpy as np
 import pandas as pd
-from sklearn.calibration import calibration_curve
-from sklearn.isotonic import IsotonicRegression
 from sklearn.compose import ColumnTransformer
 from sklearn.impute import SimpleImputer
 from sklearn.linear_model import LogisticRegression
@@ -110,19 +108,6 @@ def evaluate_by_category(test_df, y_prob, threshold):
     print(f"{'─'*60}")
 
 
-def check_calibration(y_true, y_prob, n_bins=10):
-    fraction_of_positives, mean_predicted = calibration_curve(y_true, y_prob, n_bins=n_bins)
-    print(f"\n{'─'*50}")
-    print(f"  Calibration (predicted → actual YES rate)")
-    print(f"  {'Predicted':>10}  {'Actual':>10}  {'Diff':>8}")
-    print(f"{'─'*50}")
-    for pred, actual in zip(mean_predicted, fraction_of_positives):
-        diff = actual - pred
-        flag = "  <-- over-confident" if diff < -0.05 else ("  <-- under-confident" if diff > 0.05 else "")
-        print(f"  {pred:>10.3f}  {actual:>10.3f}  {diff:>+8.3f}{flag}")
-    print(f"{'─'*50}")
-
-
 def print_feature_importance(pipeline, top_n=20):
     clf = pipeline.named_steps["clf"]
     preprocessor = pipeline.named_steps["preprocessor"]
@@ -148,60 +133,36 @@ def main():
     train = df[df["split"] == "train"]
     test  = df[df["split"] == "test"]
 
-    # Split train by market_id to avoid leakage between fit and calibration sets
-    all_market_ids = train["market_id"].unique()
-    rng = np.random.default_rng(42)
-    cal_market_ids = set(rng.choice(all_market_ids, size=int(len(all_market_ids) * 0.2), replace=False))
-
-    train_fit = train[~train["market_id"].isin(cal_market_ids)]
-    train_cal = train[train["market_id"].isin(cal_market_ids)]
-
-    print(f"  Train fit: {len(train_fit):,} rows  |  Train cal: {len(train_cal):,} rows")
-
     FEATURES = NUMERIC_FEATURES + CATEGORICAL_FEATURES
-    X_fit, y_fit   = train_fit[FEATURES], train_fit[TARGET]
-    X_cal, y_cal   = train_cal[FEATURES], train_cal[TARGET]
-    X_test, y_test = test[FEATURES],      test[TARGET]
+    X_train, y_train = train[FEATURES], train[TARGET]
+    X_test,  y_test  = test[FEATURES],  test[TARGET]
 
     print("\nTraining logistic regression...")
     pipeline = build_pipeline()
-    pipeline.fit(X_fit, y_fit)
+    counts = train.groupby("market_id").size()
+    sample_weights = train["market_id"].map(counts).rdiv(1).values
+    pipeline.fit(X_train, y_train, clf__sample_weight=sample_weights)
     print("  Done.")
 
-    print("\nCalibrating with isotonic regression...")
-    p_cal_raw = pipeline.predict_proba(X_cal)[:, 1]
-    iso = IsotonicRegression(out_of_bounds="clip")
-    iso.fit(p_cal_raw, y_cal)
-    print("  Done.")
+    y_prob = pipeline.predict_proba(X_test)[:, 1]
 
-    y_prob_raw = pipeline.predict_proba(X_test)[:, 1]
-    y_prob_cal = iso.transform(y_prob_raw)
+    optimal_threshold, best_f1 = find_optimal_threshold(y_test, y_prob)
+    print(f"\n  Optimal threshold (max F1): {optimal_threshold:.3f}  (F1={best_f1:.4f})")
 
-    optimal_threshold, best_f1 = find_optimal_threshold(y_test, y_prob_cal)
-    print(f"\n  Optimal threshold (max F1 on calibrated): {optimal_threshold:.3f}  (F1={best_f1:.4f})")
-
-    evaluate(y_test, y_prob_raw, label="Logistic Regression — Uncalibrated", threshold=optimal_threshold)
-    evaluate(y_test, y_prob_cal, label="Logistic Regression — Calibrated",   threshold=optimal_threshold)
-    evaluate_by_category(test.reset_index(drop=True), y_prob_cal, threshold=optimal_threshold)
-
-    print("\n  === Calibration before vs after ===")
-    print("  -- Before --")
-    check_calibration(y_test, y_prob_raw)
-    print("  -- After --")
-    check_calibration(y_test, y_prob_cal)
+    evaluate(y_test, y_prob, label="Logistic Regression", threshold=optimal_threshold)
+    evaluate_by_category(test.reset_index(drop=True), y_prob, threshold=optimal_threshold)
 
     print_feature_importance(pipeline)
 
     ARTIFACTS_DIR.mkdir(parents=True, exist_ok=True)
     model_path = ARTIFACTS_DIR / "model.joblib"
-    joblib.dump({"pipeline": pipeline, "calibrator": iso}, model_path)
+    joblib.dump({"pipeline": pipeline}, model_path)
     print(f"\nModel saved to {model_path}")
 
     PREDICTIONS_DIR.mkdir(parents=True, exist_ok=True)
     pred_df = test[["market_id", "category", TARGET]].copy().reset_index(drop=True)
-    pred_df["pred_prob_raw"] = y_prob_raw
-    pred_df["pred_prob"]     = y_prob_cal
-    pred_df["pred_label"]    = (y_prob_cal >= optimal_threshold).astype(int)
+    pred_df["pred_prob"]  = y_prob
+    pred_df["pred_label"] = (y_prob >= optimal_threshold).astype(int)
     preds_path = PREDICTIONS_DIR / "predictions.csv"
     pred_df.to_csv(preds_path, index=False)
     print(f"Predictions saved to {preds_path}")
