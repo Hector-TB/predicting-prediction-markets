@@ -29,4 +29,4 @@ __pycache__/
 .DS_Store
 
 # EDA
-eda.ipynb*.parquet
+eda.ipynb
