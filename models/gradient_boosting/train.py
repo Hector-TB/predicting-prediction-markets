@@ -1,3 +1,4 @@
+import itertools
 import pathlib
 import joblib
 import numpy as np
@@ -126,6 +127,49 @@ def print_feature_importance(preprocessor, clf, top_n=20):
     print(f"{'─'*50}")
 
 
+def run_grid_search(X_fit_t, y_fit, X_cal_t, y_cal, scale_pos_weight):
+    param_grid = {
+        "learning_rate":    [0.01, 0.05, 0.1],
+        "max_depth":        [4, 6, 8],
+        "min_child_weight": [5, 10, 20],
+    }
+    combinations = list(itertools.product(
+        param_grid["learning_rate"],
+        param_grid["max_depth"],
+        param_grid["min_child_weight"],
+    ))
+    print(f"\nGrid search: {len(combinations)} combinations...")
+
+    best_score  = float("inf")
+    best_params = None
+
+    for i, (lr, depth, mcw) in enumerate(combinations, 1):
+        clf = XGBClassifier(
+            n_estimators=1000,
+            early_stopping_rounds=50,
+            learning_rate=lr,
+            max_depth=depth,
+            subsample=0.8,
+            colsample_bytree=0.8,
+            min_child_weight=mcw,
+            scale_pos_weight=scale_pos_weight,
+            tree_method="hist",
+            eval_metric="logloss",
+            random_state=42,
+            n_jobs=-1,
+        )
+        clf.fit(X_fit_t, y_fit, eval_set=[(X_cal_t, y_cal)], verbose=False)
+        score = clf.best_score
+        print(f"  [{i:>2}/{len(combinations)}]  lr={lr}  depth={depth}  mcw={mcw}  →  logloss={score:.4f}  (iters={clf.best_iteration})")
+        if score < best_score:
+            best_score  = score
+            best_params = {"learning_rate": lr, "max_depth": depth, "min_child_weight": mcw}
+
+    print(f"\n  Best params : {best_params}")
+    print(f"  Best logloss: {best_score:.4f}")
+    return best_params
+
+
 def main():
     df = load_data()
     train = df[df["split"] == "train"]
@@ -155,20 +199,20 @@ def main():
     scale_pos_weight = float((y_fit == 0).sum() / (y_fit == 1).sum())
     print(f"  scale_pos_weight: {scale_pos_weight:.2f}")
 
-    print("\nTraining XGBoost...")
+    best_params = run_grid_search(X_fit_t, y_fit, X_cal_t, y_cal, scale_pos_weight)
+
+    print("\nTraining XGBoost with best params...")
     clf = XGBClassifier(
         n_estimators=1000,
         early_stopping_rounds=50,
-        learning_rate=0.05,
-        max_depth=6,
         subsample=0.8,
         colsample_bytree=0.8,
-        min_child_weight=10,
         scale_pos_weight=scale_pos_weight,
         tree_method="hist",
         eval_metric="logloss",
         random_state=42,
         n_jobs=-1,
+        **best_params,
     )
     clf.fit(
         X_fit_t, y_fit,

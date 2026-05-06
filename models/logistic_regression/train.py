@@ -9,6 +9,7 @@ from sklearn.metrics import (
     accuracy_score, average_precision_score, brier_score_loss,
     f1_score, log_loss, precision_recall_curve, roc_auc_score,
 )
+from sklearn.model_selection import GridSearchCV
 from sklearn.pipeline import Pipeline
 from sklearn.preprocessing import OneHotEncoder, StandardScaler
 
@@ -128,6 +129,33 @@ def print_feature_importance(pipeline, top_n=20):
     print(f"{'─'*50}")
 
 
+def run_grid_search(pipeline, X_train, y_train, sample_weights):
+    param_grid = [
+        {
+            "clf__C": [0.01, 0.1, 1.0, 10.0, 100.0],
+            "clf__penalty": ["l2"],
+            "clf__solver": ["lbfgs"],
+        },
+        {
+            "clf__C": [0.01, 0.1, 1.0, 10.0, 100.0],
+            "clf__penalty": ["l1"],
+            "clf__solver": ["liblinear"],
+        },
+    ]
+    grid = GridSearchCV(
+        pipeline,
+        param_grid,
+        scoring="roc_auc",
+        cv=5,
+        n_jobs=-1,
+        verbose=1,
+    )
+    grid.fit(X_train, y_train, clf__sample_weight=sample_weights)
+    print(f"\n  Best params : {grid.best_params_}")
+    print(f"  Best CV AUC : {grid.best_score_:.4f}")
+    return grid.best_estimator_
+
+
 def main():
     df = load_data()
     train = df[df["split"] == "train"]
@@ -137,11 +165,12 @@ def main():
     X_train, y_train = train[FEATURES], train[TARGET]
     X_test,  y_test  = test[FEATURES],  test[TARGET]
 
-    print("\nTraining logistic regression...")
-    pipeline = build_pipeline()
     counts = train.groupby("market_id").size()
     sample_weights = train["market_id"].map(counts).rdiv(1).values
-    pipeline.fit(X_train, y_train, clf__sample_weight=sample_weights)
+
+    print("\nRunning grid search for logistic regression...")
+    pipeline = build_pipeline()
+    pipeline = run_grid_search(pipeline, X_train, y_train, sample_weights)
     print("  Done.")
 
     y_prob = pipeline.predict_proba(X_test)[:, 1]
