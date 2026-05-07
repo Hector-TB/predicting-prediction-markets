@@ -30,7 +30,7 @@ PLOTS_DIR   = ROOT / "plots"
 # ─────────────────────────────────────────────
 
 META_CSV    = DATA_DIR / "polymarket_markets_meta.csv"
-DATASET_CSV = DATA_DIR / "polymarket_ml_dataset.parquet"
+DATASET_CSV = DATA_DIR / "polymarket_ml_dataset_clean.parquet"
 SEP         = "=" * 60
 
 ROLLING_7D  = [
@@ -411,10 +411,10 @@ def analyze_calibration(df: pd.DataFrame) -> None:
     ax.plot(bin_centers, frac_yes, color="#2196F3", linewidth=1.5)
     size = np.maximum(counts / counts.max() * 300, 20)
     ax.scatter(bin_centers, frac_yes, s=size, color="#2196F3", alpha=0.85,
-               label="Observed (size ~ count)", zorder=5)
+               label="Observed frequency", zorder=5)
     ax.set_xlabel("Market Price at Snapshot (Implied P(YES))")
     ax.set_ylabel("Fraction Resolving YES")
-    ax.set_title(f"Calibration Curve (Train)\nAUC-ROC={auc:.4f}  Log-loss={ll:.4f}")
+    ax.set_title(f"Calibration Curve (Train)")
     ax.set_xlim(0, 1)
     ax.set_ylim(0, 1)
     ax.legend()
