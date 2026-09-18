@@ -1,6 +1,11 @@
 import time
+from pathlib import Path
+
 import pandas as pd
 from pytrends.request import TrendReq
+
+ROOT = Path(__file__).resolve().parent.parent
+DATA_DIR = ROOT / "data"
 
 CATEGORY_KEYWORDS = {
     "politics_us":     ["Trump", "Biden", "Congress", "White House", "election"],
@@ -14,7 +19,7 @@ CATEGORY_KEYWORDS = {
 }
 
 TIMEFRAME = "2023-01-01 2026-02-06"
-OUTPUT_PATH = "data/category_trends_raw.csv"
+OUTPUT_PATH = DATA_DIR / "category_trends_raw.csv"
 
 
 def fetch_category(pytrends, category, keywords):

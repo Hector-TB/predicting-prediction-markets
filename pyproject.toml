@@ -1,0 +1,55 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.backends.legacy:build"
+
+[project]
+name = "predicting-prediction-markets"
+version = "0.1.0"
+description = "ML models for forecasting Polymarket binary prediction market outcomes"
+requires-python = ">=3.13"
+dependencies = [
+    # Data
+    "pandas>=2.3.2",
+    "numpy>=2.3.3",
+    "pyarrow>=24.0.0",
+
+    # HTTP / APIs
+    "requests>=2.32.5",
+    "anthropic>=0.97.0",
+    "pytrends>=4.9.2",       # Google Trends — not in pip env yet, install manually
+
+    # Database
+    "psycopg2-binary>=2.9.11",
+    "sqlalchemy>=2.0",
+    "python-dotenv>=1.2.1",
+
+    # ML
+    "scikit-learn>=1.7.2",
+    "xgboost>=3.2.0",
+    "scipy>=1.16.2",
+    "joblib>=1.5.2",
+
+    # Visualisation
+    "matplotlib>=3.10.6",
+    "seaborn>=0.13.2",
+]
+
+[project.optional-dependencies]
+dev = [
+    "jupyter",
+    "ipykernel",
+    "pytest>=8.0",
+    "ruff>=0.9",
+]
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["models*", "data_collection_pipeline*"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py313"
+
+[tool.ruff.lint]
+select = ["E", "F", "I"]   # pycodestyle errors, pyflakes, isort
+ignore = ["E501"]           # line length handled by formatter

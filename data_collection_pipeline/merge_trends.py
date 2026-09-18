@@ -1,8 +1,13 @@
+from pathlib import Path
+
 import pandas as pd
 
-SNAPSHOTS_PATH = "data/polymarket_ml_dataset.parquet"
-TRENDS_PATH    = "data/category_trends_features.parquet"
-OUTPUT_PATH    = "data/polymarket_ml_dataset_with_trends.parquet"
+ROOT = Path(__file__).resolve().parent.parent
+DATA_DIR = ROOT / "data"
+
+SNAPSHOTS_PATH = DATA_DIR / "polymarket_ml_dataset.parquet"
+TRENDS_PATH    = DATA_DIR / "category_trends_features.parquet"
+OUTPUT_PATH    = DATA_DIR / "polymarket_ml_dataset_with_trends.parquet"
 
 TREND_COLS = ["trend_value", "trend_ma4", "trend_change_4w", "trend_spike", "has_trend_data"]
 

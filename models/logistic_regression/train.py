@@ -1,20 +1,26 @@
 import pathlib
+import sys
+
 import joblib
 import numpy as np
 import pandas as pd
 from sklearn.compose import ColumnTransformer
 from sklearn.impute import SimpleImputer
 from sklearn.linear_model import LogisticRegression
-from sklearn.metrics import (
-    accuracy_score, average_precision_score, brier_score_loss,
-    f1_score, log_loss, precision_recall_curve, roc_auc_score,
-)
+from sklearn.metrics import precision_recall_curve, roc_auc_score
 from sklearn.model_selection import GridSearchCV
 from sklearn.pipeline import Pipeline
 from sklearn.preprocessing import OneHotEncoder, StandardScaler
 
 ROOT = pathlib.Path(__file__).resolve().parents[2]
 DATA_DIR = ROOT / "data"
+sys.path.insert(0, str(ROOT))
+
+from models.common.evaluation import (  # noqa: E402
+    evaluate,
+    evaluate_by_category,
+    find_optimal_threshold,
+)
 ARTIFACTS_DIR = pathlib.Path(__file__).parent / "artifacts"
 PREDICTIONS_DIR = pathlib.Path(__file__).parent / "predictions"
 
@@ -62,51 +68,6 @@ def build_pipeline():
         )),
     ])
 
-
-def find_optimal_threshold(y_true, y_prob):
-    precision, recall, thresholds = precision_recall_curve(y_true, y_prob)
-    f1_scores = 2 * precision * recall / (precision + recall + 1e-9)
-    best_idx = np.argmax(f1_scores)
-    return float(thresholds[best_idx]), float(f1_scores[best_idx])
-
-
-def evaluate(y_true, y_prob, label="", threshold=0.5):
-    y_pred = (y_prob >= threshold).astype(int)
-    print(f"\n{'─'*50}")
-    if label:
-        print(f"  {label}")
-    print(f"  Threshold: {threshold:.3f}")
-    print(f"  AUC-ROC   : {roc_auc_score(y_true, y_prob):.4f}")
-    print(f"  PR-AUC    : {average_precision_score(y_true, y_prob):.4f}")
-    print(f"  Log-loss  : {log_loss(y_true, y_prob):.4f}")
-    print(f"  Brier     : {brier_score_loss(y_true, y_prob):.4f}")
-    print(f"  Accuracy  : {accuracy_score(y_true, y_pred):.4f}")
-    print(f"  F1        : {f1_score(y_true, y_pred):.4f}")
-    print(f"{'─'*50}")
-
-
-def evaluate_by_category(test_df, y_prob, threshold):
-    print(f"\n{'─'*60}")
-    print(f"  Per-category metrics (threshold={threshold:.3f})")
-    print(f"  {'Category':<20} {'N':>7}  {'AUC':>6}  {'PR-AUC':>7}  {'F1':>6}  {'YES%':>6}")
-    print(f"{'─'*60}")
-
-    for cat in sorted(test_df["category"].unique()):
-        mask = test_df["category"] == cat
-        y_true_cat = test_df.loc[mask, TARGET].values
-        y_prob_cat = y_prob[mask.values]
-
-        if len(np.unique(y_true_cat)) < 2 or len(y_true_cat) < 10:
-            continue
-
-        y_pred_cat = (y_prob_cat >= threshold).astype(int)
-        auc  = roc_auc_score(y_true_cat, y_prob_cat)
-        pr   = average_precision_score(y_true_cat, y_prob_cat)
-        f1   = f1_score(y_true_cat, y_pred_cat)
-        yes  = y_true_cat.mean()
-        print(f"  {cat:<20} {mask.sum():>7,}  {auc:>6.4f}  {pr:>7.4f}  {f1:>6.4f}  {yes:>6.1%}")
-
-    print(f"{'─'*60}")
 
 
 def print_feature_importance(pipeline, top_n=20):

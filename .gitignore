@@ -28,3 +28,4 @@ __pycache__/
 # EDA
 eda.ipynb
 .DS_Store
+.env
