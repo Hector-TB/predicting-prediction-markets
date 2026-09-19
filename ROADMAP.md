@@ -10,13 +10,11 @@ Ordered by priority. See `docs/decisions/` for the reasoning behind architectura
 Schema in `db/migrations/001_initial_schema.sql`. All 5 tables created.
 20,948 markets · 1,458 trends · 9 model_runs loaded via `db/load_parquet.py`.
 
-### 2. Audit and harden the data refresh pipeline
-The pipeline scripts were written for a one-time run. Before treating them as operational, verify:
-- `update_markets.py` correctly fetches only markets newer than the last run
-- `build_snapshots.py` checkpoint/resume works correctly on incremental runs
-- `categorize_markets.py` skips already-categorised markets
-- `fetch_category_trends.py` handles date ranges that extend the existing trends data
-- End-to-end: run the full pipeline from step 1 → step 6 on fresh data, push to S3
+### 2. ~~Audit and harden the data refresh pipeline~~ ✓ DONE
+All 5 issues fixed: incremental fetch in `fetch_markets.py` (frozen split); dynamic
+timeframe + append in `fetch_category_trends.py`; absolute paths in `build_trend_features.py`;
+parquet output in `fix_dataset.py`; dynamic `HARD_CUTOFF` + single-file input in `fix_leakage.py`.
+- TODO: end-to-end run on fresh data + push to S3 (do before step 4)
 
 ### 3. ~~Write `train.py` for random forest~~ ✓ DONE
 `models/random_forest/train.py` and `models/random_forest_trends/train.py` written.
