@@ -1,4 +1,5 @@
 import time
+from datetime import date
 from pathlib import Path
 
 import pandas as pd
@@ -18,13 +19,28 @@ CATEGORY_KEYWORDS = {
     "entertainment":   ["Taylor Swift", "Netflix", "movies", "music", "celebrity"],
 }
 
-TIMEFRAME = "2023-01-01 2026-02-06"
 OUTPUT_PATH = DATA_DIR / "category_trends_raw.csv"
 
 
-def fetch_category(pytrends, category, keywords):
+def get_timeframe() -> tuple[str, str]:
+    """Return (start_date, end_date) for the API call.
+
+    On first run: full history from 2023-01-01.
+    On subsequent runs: picks up from the week after the last fetched week.
+    """
+    if OUTPUT_PATH.exists():
+        existing = pd.read_csv(OUTPUT_PATH)
+        max_week  = pd.to_datetime(existing["week_start"]).max()
+        start_str = (max_week + pd.Timedelta(weeks=1)).strftime("%Y-%m-%d")
+    else:
+        start_str = "2023-01-01"
+    end_str = date.today().strftime("%Y-%m-%d")
+    return start_str, end_str
+
+
+def fetch_category(pytrends, category, keywords, timeframe: str):
     print(f"Fetching: {category} {keywords}")
-    pytrends.build_payload(keywords, timeframe=TIMEFRAME, geo="")
+    pytrends.build_payload(keywords, timeframe=timeframe, geo="")
     df = pytrends.interest_over_time()
 
     if df.empty:
@@ -44,11 +60,19 @@ def fetch_category(pytrends, category, keywords):
 
 
 def main():
-    pytrends = TrendReq(hl="en-US", tz=0, timeout=(10, 25))
+    start_date, end_date = get_timeframe()
+    timeframe = f"{start_date} {end_date}"
+
+    if start_date >= end_date:
+        print(f"Trends already up to date (coverage through {start_date}). Nothing to fetch.")
+        return
+
+    print(f"Fetching trends for timeframe: {timeframe}")
+    pytrends    = TrendReq(hl="en-US", tz=0, timeout=(10, 25))
     all_results = []
 
     for i, (category, keywords) in enumerate(CATEGORY_KEYWORDS.items()):
-        result = fetch_category(pytrends, category, keywords)
+        result = fetch_category(pytrends, category, keywords, timeframe)
         if result is not None:
             all_results.append(result)
         if i < len(CATEGORY_KEYWORDS) - 1:
@@ -58,9 +82,17 @@ def main():
         print("No data fetched.")
         return
 
-    combined = pd.concat(all_results, ignore_index=True)
+    new_data = pd.concat(all_results, ignore_index=True)
+
+    if OUTPUT_PATH.exists():
+        existing = pd.read_csv(OUTPUT_PATH)
+        combined = pd.concat([existing, new_data], ignore_index=True)
+        combined = combined.drop_duplicates(subset=["category", "week_start"]).reset_index(drop=True)
+    else:
+        combined = new_data
+
     combined.to_csv(OUTPUT_PATH, index=False)
-    print(f"\nSaved {len(combined)} rows to {OUTPUT_PATH}")
+    print(f"\nSaved {len(combined)} rows to {OUTPUT_PATH} ({len(new_data)} new rows appended)")
     print(combined.groupby("category")["trend_value"].describe().round(2))
 
 

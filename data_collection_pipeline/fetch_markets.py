@@ -48,6 +48,28 @@ OUTPUT_META         = DATA_DIR / "polymarket_markets_meta.csv"
 
 
 # ─────────────────────────────────────────────
+# INCREMENTAL SUPPORT
+# ─────────────────────────────────────────────
+
+def load_existing_meta() -> tuple:
+    """
+    Returns (existing_df | None, fetch_from_date, split_cutoff | None).
+    fetch_from_date: start_date_min to pass to the API.
+    split_cutoff:    start_date of the first test market (freeze existing split).
+    """
+    if not OUTPUT_META.exists():
+        return None, START_DATE_MIN, None
+
+    df = pd.read_csv(OUTPUT_META)
+    df["start_date"] = pd.to_datetime(df["start_date"], utc=True, errors="coerce")
+    fetch_from   = (df["start_date"].max() - pd.Timedelta(days=7)).strftime("%Y-%m-%d")
+    test_cutoff  = df[df["split"] == "test"]["start_date"].min() if "split" in df.columns else None
+    split_cutoff = test_cutoff.strftime("%Y-%m-%d") if test_cutoff is not pd.NaT and test_cutoff is not None else None
+    print(f"  Found {len(df):,} existing markets — fetching from {fetch_from}")
+    return df, fetch_from, split_cutoff
+
+
+# ─────────────────────────────────────────────
 # HELPERS
 # ─────────────────────────────────────────────
 
@@ -75,12 +97,12 @@ def parse_dt(value) -> Optional[pd.Timestamp]:
 # FETCH
 # ─────────────────────────────────────────────
 
-def fetch_all_markets() -> list[dict]:
+def fetch_all_markets(start_date_min: str = START_DATE_MIN) -> list[dict]:
     print("=" * 60)
     print("STEP 1: Fetching markets from Gamma API")
     print("=" * 60)
     print(f"  volume_num_min : {VOLUME_NUM_MIN:,}")
-    print(f"  start_date_min : {START_DATE_MIN}\n")
+    print(f"  start_date_min : {start_date_min}\n")
 
     all_markets = []
     offset = 0
@@ -95,7 +117,7 @@ def fetch_all_markets() -> list[dict]:
             "order":          "startDate",
             "ascending":      "true",
             "volume_num_min": VOLUME_NUM_MIN,
-            "start_date_min": START_DATE_MIN,
+            "start_date_min": start_date_min,
         }
 
         batch = None
@@ -260,24 +282,45 @@ def main():
     print("  POLYMARKET — FETCH & FILTER MARKETS")
     print("█" * 60 + "\n")
 
-    raw_markets = fetch_all_markets()
+    existing_df, fetch_from, split_cutoff = load_existing_meta()
 
-    markets_df = parse_and_filter_markets(raw_markets)
-    if markets_df.empty:
+    raw_markets = fetch_all_markets(start_date_min=fetch_from)
+
+    new_df = parse_and_filter_markets(raw_markets)
+    if new_df.empty and existing_df is None:
         print("No markets passed filters. Exiting.")
         return
 
-    # Temporal train/test split (80/20) — oldest 80% train, newest 20% test
-    markets_df = markets_df.sort_values("start_date").reset_index(drop=True)
-    n = len(markets_df)
-    cutoff_idx  = int(n * 0.8)
-    cutoff_date = markets_df.iloc[cutoff_idx]["start_date"]
-    markets_df["split"] = ["train"] * cutoff_idx + ["test"] * (n - cutoff_idx)
-    print(f"  Split cutoff: {cutoff_date.date()} — train={cutoff_idx:,}  test={n-cutoff_idx:,}")
+    if existing_df is not None:
+        known_ids = set(existing_df["market_id"])
+        new_df = new_df[~new_df["market_id"].isin(known_ids)].reset_index(drop=True)
+        print(f"\n  {len(new_df):,} genuinely new markets after dedup")
 
-    # Save — include clob_token_id so build_snapshots.py can use it
+        if new_df.empty:
+            print("  Nothing new — output unchanged.")
+            return
+
+        # New markets are temporally after the existing split cutoff → assign test
+        if split_cutoff:
+            cutoff_ts = pd.Timestamp(split_cutoff, tz="UTC")
+            new_df["split"] = new_df["start_date"].apply(
+                lambda d: "test" if d >= cutoff_ts else "train"
+            )
+        else:
+            new_df["split"] = "test"
+
+        markets_df = pd.concat([existing_df, new_df], ignore_index=True)
+        markets_df = markets_df.sort_values("start_date").reset_index(drop=True)
+    else:
+        # First run — compute 80/20 split on full corpus
+        markets_df = new_df.sort_values("start_date").reset_index(drop=True)
+        n           = len(markets_df)
+        cutoff_idx  = int(n * 0.8)
+        cutoff_date = markets_df.iloc[cutoff_idx]["start_date"]
+        markets_df["split"] = ["train"] * cutoff_idx + ["test"] * (n - cutoff_idx)
+        print(f"  Split cutoff: {cutoff_date.date()} — train={cutoff_idx:,}  test={n-cutoff_idx:,}")
+
     markets_df.to_csv(OUTPUT_META, index=False)
-
     print(f"\nSaved: {OUTPUT_META}")
     print(f"  Markets: {len(markets_df):,}")
     print(f"  Columns: {list(markets_df.columns)}")

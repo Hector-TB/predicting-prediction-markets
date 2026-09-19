@@ -119,6 +119,11 @@ def main():
     df.to_csv(DATASET_CSV, index=False)
     print(f"  Saved {DATASET_CSV}  ({len(df):,} rows)")
 
+    parquet_path = DATASET_CSV.with_suffix(".parquet")
+    print(f"  Writing dataset parquet...")
+    df.to_parquet(parquet_path, index=False)
+    print(f"  Saved {parquet_path}  ({len(df):,} rows)")
+
     # ── Final validation ─────────────────────────────────
     print(f"\n{SEP}\n  VALIDATION\n{SEP}")
     print(f"  Meta market_ids unique:    {meta['market_id'].nunique():,}  (dupes: {meta['market_id'].duplicated().sum()})")

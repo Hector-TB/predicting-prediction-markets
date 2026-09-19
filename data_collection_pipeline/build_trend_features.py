@@ -1,7 +1,11 @@
+from pathlib import Path
+
 import pandas as pd
 
-INPUT_PATH  = "data/category_trends_raw.csv"
-OUTPUT_PATH = "data/category_trends_features.parquet"
+ROOT        = Path(__file__).resolve().parent.parent
+DATA_DIR    = ROOT / "data"
+INPUT_PATH  = DATA_DIR / "category_trends_raw.csv"
+OUTPUT_PATH = DATA_DIR / "category_trends_features.parquet"
 
 ALL_CATEGORIES = [
     "politics_us", "politics_global", "crypto", "sports",

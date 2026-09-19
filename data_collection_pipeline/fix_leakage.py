@@ -26,10 +26,9 @@ ROOT     = pathlib.Path(__file__).resolve().parent.parent
 DATA_DIR = ROOT / "data"
 
 # Read-only inputs — never written to
-META_CSV      = DATA_DIR / "polymarket_markets_meta.csv"
-PARQUET_MAIN  = DATA_DIR / "polymarket_ml_dataset.parquet"
-PARQUET_T1    = DATA_DIR / "polymarket_ml_dataset_with_trends_part1.parquet"
-PARQUET_T2    = DATA_DIR / "polymarket_ml_dataset_with_trends_part2.parquet"
+META_CSV       = DATA_DIR / "polymarket_markets_meta.csv"
+PARQUET_MAIN   = DATA_DIR / "polymarket_ml_dataset.parquet"
+PARQUET_TRENDS = DATA_DIR / "polymarket_ml_dataset_with_trends.parquet"
 
 # New output files — originals are untouched
 CLOSED_TIMES_CSV        = DATA_DIR / "market_closed_times.csv"
@@ -143,9 +142,9 @@ def fetch_closed_times(market_ids: list[str]) -> pd.DataFrame:
 # STEP 2 — FILTER PARQUET
 # ─────────────────────────────────────────────
 
-PRICE_THRESHOLD  = 0.95                                    # settled if price >= 0.95 or <= 0.05
-INACTIVITY_DAYS  = 14                                      # keep N days after settlement/last change
-HARD_CUTOFF      = pd.Timestamp("2026-05-01", tz="UTC")   # absolute ceiling
+PRICE_THRESHOLD  = 0.95                                                          # settled if price >= 0.95 or <= 0.05
+INACTIVITY_DAYS  = 14                                                            # keep N days after settlement/last change
+HARD_CUTOFF      = (pd.Timestamp.now(tz="UTC") + pd.Timedelta(days=1)).normalize()  # tomorrow midnight — includes today
 
 
 def price_based_cutoffs(df: pd.DataFrame) -> pd.Series:
@@ -277,15 +276,14 @@ def main():
     print("█" * 60)
 
     # Confirm originals exist
-    for p in [META_CSV, PARQUET_MAIN, PARQUET_T1, PARQUET_T2]:
+    for p in [META_CSV, PARQUET_MAIN, PARQUET_TRENDS]:
         if not p.exists():
             print(f"\nERROR: {p} not found.")
             return
 
     # Confirm we are NOT about to overwrite originals
-    assert PARQUET_MAIN != PARQUET_MAIN_CLEAN, "SAFETY: output path equals input path"
-    assert PARQUET_TRENDS_CLEAN != PARQUET_T1,  "SAFETY: output path equals input path"
-    assert PARQUET_TRENDS_CLEAN != PARQUET_T2,  "SAFETY: output path equals input path"
+    assert PARQUET_MAIN   != PARQUET_MAIN_CLEAN,   "SAFETY: output path equals input path"
+    assert PARQUET_TRENDS != PARQUET_TRENDS_CLEAN, "SAFETY: output path equals input path"
 
     print("\n" + "=" * 60)
     print("STEP 1 — Fetch closedTime from Gamma API")
@@ -309,33 +307,18 @@ def main():
     print("STEP 2 — Filter parquet files")
     print("=" * 60)
 
-    # Base dataset — filter directly
+    # Base dataset
     filter_parquet(PARQUET_MAIN, PARQUET_MAIN_CLEAN, closed_times)
 
-    # Trends dataset — part1 and part2 were split by row position so 449 markets
-    # have their rows divided across both files.  Filtering them separately would
-    # compute price_based_cutoffs on incomplete market histories, producing slightly
-    # different cutoffs for split markets vs filtering the full history.
-    # Fix: combine into one dataset, filter as a unit, save as a single clean file.
-    print(f"\n  Combining {PARQUET_T1.name} + {PARQUET_T2.name} ...")
-    t1 = pd.read_parquet(PARQUET_T1)
-    t2 = pd.read_parquet(PARQUET_T2)
-    trends_combined_path = DATA_DIR / "_trends_combined_tmp.parquet"
-    pd.concat([t1, t2], ignore_index=True).to_parquet(trends_combined_path, index=False)
-    del t1, t2
-    print(f"  Combined rows: {pd.read_parquet(trends_combined_path, columns=['market_id']).shape[0]:,}")
-
-    filter_parquet(trends_combined_path, PARQUET_TRENDS_CLEAN, closed_times)
-
-    trends_combined_path.unlink()  # remove temp file
+    # Trends dataset (single merged file produced by merge_trends.py)
+    filter_parquet(PARQUET_TRENDS, PARQUET_TRENDS_CLEAN, closed_times)
 
     print("\n" + "=" * 60)
     print("  DONE")
     print("=" * 60)
     print(f"  Original files unchanged:")
     print(f"    {PARQUET_MAIN.name}")
-    print(f"    {PARQUET_T1.name}")
-    print(f"    {PARQUET_T2.name}")
+    print(f"    {PARQUET_TRENDS.name}")
     print(f"\n  Clean files written:")
     print(f"    {PARQUET_MAIN_CLEAN.name}")
     print(f"    {PARQUET_TRENDS_CLEAN.name}")
