@@ -120,6 +120,12 @@ def main():
     print(f"  Saved {DATASET_CSV}  ({len(df):,} rows)")
 
     parquet_path = DATASET_CSV.with_suffix(".parquet")
+    if parquet_path.exists():
+        print(f"  Merging with existing parquet...")
+        existing_pq = pd.read_parquet(parquet_path)
+        existing_pq = existing_pq[~existing_pq["market_id"].isin(set(df["market_id"]))].copy()
+        df = pd.concat([existing_pq, df], ignore_index=True)
+        print(f"  Merged total: {len(df):,} rows")
     print(f"  Writing dataset parquet...")
     df.to_parquet(parquet_path, index=False)
     print(f"  Saved {parquet_path}  ({len(df):,} rows)")

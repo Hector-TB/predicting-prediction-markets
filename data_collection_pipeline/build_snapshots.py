@@ -163,11 +163,17 @@ def compute_snapshots(market: pd.Series, price_df: pd.DataFrame) -> Optional[pd.
 # ─────────────────────────────────────────────
 
 def load_processed_ids() -> set:
-    """Resume support — read already-processed market IDs from existing CSV."""
+    """Resume support — check CSV first, fall back to parquet if no CSV exists."""
     if OUTPUT_DATASET.exists():
         existing = pd.read_csv(OUTPUT_DATASET, usecols=["market_id"])
         ids = set(existing["market_id"].unique())
-        print(f"  Resuming — found {len(ids):,} already-processed markets in {OUTPUT_DATASET}")
+        print(f"  Resuming — {len(ids):,} already-processed markets in CSV")
+        return ids
+    parquet_path = OUTPUT_DATASET.with_suffix(".parquet")
+    if parquet_path.exists():
+        existing = pd.read_parquet(parquet_path, columns=["market_id"])
+        ids = set(existing["market_id"].unique())
+        print(f"  Resuming — {len(ids):,} already-processed markets in parquet (no CSV found)")
         return ids
     return set()
 
