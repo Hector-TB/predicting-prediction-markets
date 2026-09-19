@@ -293,9 +293,12 @@ def main():
         print(f"  Cache found — loading {CLOSED_TIMES_CSV.name}  (delete file to re-fetch)")
         closed_times = pd.read_csv(CLOSED_TIMES_CSV)
     else:
-        meta = pd.read_csv(META_CSV)
-        market_ids = meta["market_id"].tolist()
-        print(f"  Markets in meta: {len(market_ids):,}")
+        # Read market IDs from the parquet so we cover all markets, not just the meta CSV
+        market_ids = (
+            pd.read_parquet(PARQUET_MAIN, columns=["market_id"])["market_id"]
+            .unique().tolist()
+        )
+        print(f"  Markets in parquet: {len(market_ids):,}")
         closed_times = fetch_closed_times(market_ids)
 
     populated = closed_times["closed_time"].notna().sum()
