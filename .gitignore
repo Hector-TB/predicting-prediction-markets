@@ -1,8 +1,7 @@
-# Data files
-*.csv
-# Parquet files are tracked (shared via git)
-# Unsplit version is too large for GitHub — use the part1/part2 files instead
-data/polymarket_ml_dataset_with_trends.parquet
+# Data files — live on S3, not in git (see ADR-012)
+# Sync with: python data/sync.py pull / push
+data/*.parquet
+data/*.csv
 
 # Notebooks
 testing.ipynb
