@@ -6,10 +6,9 @@ Ordered by priority. See `docs/decisions/` for the reasoning behind architectura
 
 ## Now — unblock the foundation
 
-### 1. Apply pending DB migration + populate DB
-- Wait for Supabase to recover from hot standby
-- Apply `db/migrations/004_add_model_run_metrics.sql` (adds `metrics` JSONB to `model_runs`)
-- Run `python db/load_parquet.py` (markets already loaded; adds trends + model_runs with metrics)
+### 1. ~~Apply pending DB migration + populate DB~~ ✓ DONE
+Schema in `db/migrations/001_initial_schema.sql`. All 5 tables created.
+20,948 markets · 1,458 trends · 9 model_runs loaded via `db/load_parquet.py`.
 
 ### 2. Audit and harden the data refresh pipeline
 The pipeline scripts were written for a one-time run. Before treating them as operational, verify:
