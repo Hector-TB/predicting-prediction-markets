@@ -17,10 +17,10 @@ Originally NYU DS-GA 1003 (team of 3). Now being productionized into a full-stac
 
 ## Current state (as of 2026-09-19)
 
-- Phase: productionization — foundation complete, working toward live scoring
-- Data: parquet files on S3 (`python data/sync.py pull` to fetch)
-- Models trained: logistic regression, XGBoost, SVM (±trends), random forest (notebook only)
-- Database: Supabase schema created; `db/load_parquet.py` loads metadata + model registry
+- Phase: productionization — data pipeline hardened, working toward live scoring
+- Data: parquet files on S3 (`python data/sync.py pull` to fetch); pipeline runner at `data_collection_pipeline/run_pipeline.py`
+- Models trained: logistic regression, XGBoost, SVM (±trends), random forest (train.py done, not yet retrained on latest data)
+- Database: Supabase (free tier); schema in `db/migrations/001_initial_schema.sql`; 20,948 markets + 9 model_runs loaded
 - No API, no frontend yet
 
 ---
@@ -58,7 +58,7 @@ Originally NYU DS-GA 1003 (team of 3). Now being productionized into a full-stac
 - DB holds: `markets` (metadata), `trends`, `model_runs` (with metrics JSONB)
 - DB will hold `snapshots` + `predictions` for live markets only (not backfilled)
 - To populate: `python db/load_parquet.py` (runs in seconds)
-- Pending migration: `db/migrations/004_add_model_run_metrics.sql`
+- Schema includes metrics + hyperparams JSONB on model_runs (004 is already in initial schema)
 
 ---
 

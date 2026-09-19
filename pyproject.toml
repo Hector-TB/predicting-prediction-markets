@@ -16,7 +16,7 @@ dependencies = [
     # HTTP / APIs
     "requests>=2.32.5",
     "anthropic>=0.97.0",
-    "pytrends>=4.9.2",       # Google Trends — not in pip env yet, install manually
+    "pytrends>=4.9.2",
 
     # Database / storage
     "psycopg2-binary>=2.9.11",
