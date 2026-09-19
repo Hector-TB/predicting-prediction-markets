@@ -77,6 +77,13 @@ All scripts resolve paths relative to `__file__`, so they work from any working 
 
 The canonical dataset for modelling is `data/polymarket_ml_dataset_clean.parquet` (base features) or `data/polymarket_ml_dataset_with_trends_clean.parquet` (with Google Trends).
 
+**Data files live on S3** (ADR-012). On a new machine, pull them before training:
+```bash
+python data/sync.py pull     # download all parquet files from S3
+python data/sync.py push     # upload after re-running the pipeline
+python data/sync.py status   # compare local vs S3
+```
+
 ---
 
 ## Training models
@@ -153,3 +160,4 @@ All significant decisions are documented in `docs/decisions/`. Read the relevant
 - Google Trends enrichment approach → ADR-009
 - Database design → ADR-010
 - Offline/online split (parquet vs DB) → ADR-011
+- S3 + DuckDB data lake → ADR-012
