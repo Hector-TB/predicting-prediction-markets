@@ -19,10 +19,9 @@ The pipeline scripts were written for a one-time run. Before treating them as op
 - `fetch_category_trends.py` handles date ranges that extend the existing trends data
 - End-to-end: run the full pipeline from step 1 → step 6 on fresh data, push to S3
 
-### 3. Write `train.py` for random forest
-`models/random_forest/` and `models/random_forest_trends/` are notebook-only.
-Need `train.py` files so both models are included in `/sync-and-train` and `/evaluate`.
-Follow the pattern in `models/gradient_boosting/train.py`.
+### 3. ~~Write `train.py` for random forest~~ ✓ DONE
+`models/random_forest/train.py` and `models/random_forest_trends/train.py` written.
+Both follow the gradient_boosting pattern: combined sample weights, 5-fold CV, isotonic calibration.
 
 ### 4. Retrain all models on latest data
 After the pipeline refresh (step 2) is confirmed clean:
