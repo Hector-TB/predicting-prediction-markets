@@ -14,13 +14,14 @@ Originally a course project (NYU DS-GA 1003, team of 3). Now being productionize
 
 ---
 
-## Current state (as of 2026-09-18)
+## Current state (as of 2026-09-19)
 
 - Phase: cleanup + foundation (steps 1–4 of productionization plan)
 - Pipeline scripts work and have been run; output parquet files are in `data/`
-- Models trained: logistic regression, XGBoost, SVM (with and without trends)
+- Models trained: logistic regression, XGBoost, SVM (with and without trends), random forest (notebook only)
 - Incomplete: random_forest has notebook only (no train.py), lightgbm is an empty placeholder
-- No database, no API, no frontend yet
+- Database: Supabase Postgres schema created; `db/load_parquet.py` loads metadata + model registry
+- No API, no frontend yet
 - See `docs/decisions/` for Architecture Decision Records
 
 ---
@@ -126,6 +127,18 @@ pip install -e ".[dev]"
 
 ---
 
+## Database
+
+**Split: parquet for training, Postgres for operations (ADR-011).**
+
+- Training scripts read parquet directly — never query the database
+- The DB holds: `markets` (metadata), `trends`, `model_runs` (with metrics JSONB)
+- The DB will hold `snapshots` + `predictions` for **live markets only** (not backfilled with 1.4M historical rows)
+- To populate the DB: `python db/load_parquet.py` (completes in seconds)
+- Pending migration before first run: `db/migrations/004_add_model_run_metrics.sql`
+
+---
+
 ## Architecture decisions
 
 All significant decisions are documented in `docs/decisions/`. Read the relevant ADR before changing any of the following:
@@ -138,3 +151,5 @@ All significant decisions are documented in `docs/decisions/`. Read the relevant
 - Class imbalance handling → ADR-007
 - Market filters → ADR-008
 - Google Trends enrichment approach → ADR-009
+- Database design → ADR-010
+- Offline/online split (parquet vs DB) → ADR-011
