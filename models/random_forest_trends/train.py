@@ -7,6 +7,9 @@ Trains four Random Forest variants on the Google Trends-enriched dataset:
   - rf_trends              — 26 features (full + 5 Google Trends columns)
   - rf_trends_calibrated   — rf_trends + isotonic calibration on held-out set
 
+Grid-searches max_depth × min_samples_leaf on the trends feature set before
+the final fit (100 trees per candidate, 300 for the winner).
+
 Mirrors models/random_forest/train.py but uses the with_trends dataset.
 The extra Trends features are the primary comparison point (RQ2, RQ3).
 
@@ -14,6 +17,7 @@ Usage:
     python models/random_forest_trends/train.py
 """
 
+import itertools
 import logging
 import sys
 from pathlib import Path
@@ -35,9 +39,12 @@ PREDICTIONS_DIR = Path(__file__).parent / "predictions"
 
 sys.path.insert(0, str(ROOT))
 from models.common.evaluation import (  # noqa: E402
+    analyze_market_disagreements,
+    bootstrap_auc_diff,
     check_calibration,
     evaluate,
     evaluate_by_category,
+    evaluate_by_volume_quintile,
     find_optimal_threshold,
 )
 
@@ -62,10 +69,13 @@ FEATURES_TRENDS = FEATURES_FULL + [
     "trend_value", "trend_ma4", "trend_change_4w", "trend_spike", "has_trend_data",
 ]
 
-RF_PARAMS = dict(
+GRID = {
+    "max_depth":        [8, 12, 16, 20],
+    "min_samples_leaf": [20, 50, 100],
+}
+
+RF_BASE = dict(
     n_estimators=300,
-    max_depth=16,
-    min_samples_leaf=50,
     max_features="sqrt",
     n_jobs=-1,
     random_state=42,
@@ -114,12 +124,38 @@ def make_sample_weights(y: np.ndarray, market_ids: np.ndarray) -> np.ndarray:
     return (combined / combined.mean()).astype(np.float32)
 
 
+def run_grid_search(
+    X_fit: np.ndarray, y_fit: np.ndarray, weights_fit: np.ndarray,
+    X_val: np.ndarray, y_val: np.ndarray,
+) -> dict:
+    """Grid-search max_depth × min_samples_leaf on trends features using the val set (100 trees)."""
+    combos = list(itertools.product(GRID["max_depth"], GRID["min_samples_leaf"]))
+    log.info("\nGrid search: %d combinations (100 trees each) ...", len(combos))
+
+    best_auc    = -1.0
+    best_params: dict = {}
+
+    for i, (depth, leaf) in enumerate(combos, 1):
+        clf = RandomForestClassifier(**RF_BASE, n_estimators=100, max_depth=depth, min_samples_leaf=leaf)
+        clf.fit(X_fit, y_fit, sample_weight=weights_fit)
+        auc = roc_auc_score(y_val, clf.predict_proba(X_val)[:, 1])
+        marker = " *" if auc > best_auc else ""
+        log.info("  [%2d/%d]  depth=%-3d  leaf=%-4d  AUC=%.4f%s",
+                 i, len(combos), depth, leaf, auc, marker)
+        if auc > best_auc:
+            best_auc    = auc
+            best_params = {"max_depth": depth, "min_samples_leaf": leaf}
+
+    log.info("  Best: %s  →  AUC=%.4f", best_params, best_auc)
+    return best_params
+
+
 def run_cv(X: np.ndarray, y: np.ndarray, groups: np.ndarray,
-           weights: np.ndarray, n_splits: int = 5) -> list[float]:
-    cv     = StratifiedGroupKFold(n_splits=n_splits)
-    aucs   = []
+           weights: np.ndarray, rf_params: dict, n_splits: int = 5) -> list[float]:
+    cv   = StratifiedGroupKFold(n_splits=n_splits)
+    aucs = []
     log.info("\nRunning %d-fold CV on trends features (100 trees) ...", n_splits)
-    cv_params = {**RF_PARAMS, "n_estimators": 100}
+    cv_params = {**RF_BASE, **rf_params, "n_estimators": 100}
     for fold, (tr, val) in enumerate(cv.split(X, y, groups=groups), 1):
         clf = RandomForestClassifier(**cv_params)
         clf.fit(X[tr], y[tr], sample_weight=weights[tr])
@@ -152,22 +188,26 @@ def main():
 
     sample_weights = make_sample_weights(y_fit, train_fit["market_id"].values)
 
-    run_cv(X_fit_trends, y_fit, train_fit["market_id"].values, sample_weights)
+    best_params = run_grid_search(X_fit_trends, y_fit, sample_weights, X_cal_trends, y_cal)
+    rf_params   = {**RF_BASE, **best_params}
 
-    log.info("\nTraining rf_price_only (300 trees) ...")
-    rf_price = RandomForestClassifier(**RF_PARAMS)
+    run_cv(X_fit_trends, y_fit, train_fit["market_id"].values, sample_weights, best_params)
+
+    log.info("\nTraining rf_price_only (300 trees, default depth=16 leaf=50) ...")
+    rf_price = RandomForestClassifier(**RF_BASE, max_depth=16, min_samples_leaf=50)
     rf_price.fit(X_fit_price, y_fit, sample_weight=sample_weights)
     joblib.dump(rf_price, ARTIFACTS_DIR / "trends_rf_price_only.pkl")
 
-    log.info("Training rf_full (300 trees) ...")
-    rf_full = RandomForestClassifier(**RF_PARAMS)
+    log.info("Training rf_full (300 trees, best params) ...")
+    rf_full = RandomForestClassifier(**rf_params)
     rf_full.fit(X_fit_full, y_fit, sample_weight=sample_weights)
     joblib.dump(rf_full, ARTIFACTS_DIR / "trends_rf_full.pkl")
 
-    log.info("Training rf_trends (300 trees) ...")
-    rf_trends = RandomForestClassifier(**RF_PARAMS)
+    log.info("Training rf_trends (300 trees, best params) ...")
+    rf_trends = RandomForestClassifier(**rf_params)
     rf_trends.fit(X_fit_trends, y_fit, sample_weight=sample_weights)
     joblib.dump(rf_trends, ARTIFACTS_DIR / "trends_rf_trends.pkl")
+    log.info("  Saved trends_rf_trends.pkl (params: %s)", best_params)
 
     log.info("Calibrating rf_trends with isotonic regression ...")
     p_cal_raw = rf_trends.predict_proba(X_cal_trends)[:, 1]
@@ -187,12 +227,34 @@ def main():
     evaluate(y_test, proba_tr,    label="RF Trends — trends",     threshold=threshold)
     evaluate(y_test, proba_cal,   label="RF Trends — calibrated", threshold=threshold)
     evaluate_by_category(test, proba_cal, threshold=threshold)
+    evaluate_by_volume_quintile(test, proba_cal, threshold=threshold)
+    analyze_market_disagreements(test, proba_cal, threshold=threshold)
+
+    log.info("\nBootstrap CI: RF+Trends vs RF (full features, no trends) ...")
+    bootstrap_auc_diff(y_test, proba_full, proba_tr)
 
     log.info("\nCalibration (before vs after):")
     log.info("  Before:")
     check_calibration(y_test, proba_tr)
     log.info("  After:")
     check_calibration(y_test, proba_cal)
+
+    log.info("\nSHAP feature attribution on trends model (TreeExplainer, sample=5000) ...")
+    try:
+        import shap
+        rng_shap  = np.random.default_rng(42)
+        idx_shap  = rng_shap.choice(len(X_test_trends), size=min(5000, len(X_test_trends)), replace=False)
+        explainer = shap.TreeExplainer(rf_trends)
+        shap_vals = explainer.shap_values(X_test_trends[idx_shap])
+        sv = shap_vals[1] if isinstance(shap_vals, list) else shap_vals
+        mean_abs  = np.abs(sv).mean(axis=0)
+        ranked    = sorted(zip(FEATURES_TRENDS, mean_abs), key=lambda x: x[1], reverse=True)
+        log.info("  Top features by mean |SHAP|:")
+        for feat, score in ranked[:12]:
+            bar = "█" * max(1, int(score * 300))
+            log.info("    %+.4f  %-30s  %s", score, feat, bar)
+    except Exception as e:
+        log.warning("  SHAP skipped: %s", e)
 
     pred_df = test[["market_id", "snapshot_timestamp", TARGET, "split"]].copy()
     pred_df["proba_price_only"]        = proba_price.round(6)

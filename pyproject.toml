@@ -30,6 +30,7 @@ dependencies = [
     "xgboost>=3.2.0",
     "scipy>=1.16.2",
     "joblib>=1.5.2",
+    "shap>=0.46",
 
     # Visualisation
     "matplotlib>=3.10.6",

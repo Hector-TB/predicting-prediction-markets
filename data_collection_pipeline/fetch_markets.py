@@ -97,17 +97,27 @@ def parse_dt(value) -> Optional[pd.Timestamp]:
 # FETCH
 # ─────────────────────────────────────────────
 
-def fetch_all_markets(start_date_min: str = START_DATE_MIN) -> list[dict]:
-    print("=" * 60)
-    print("STEP 1: Fetching markets from Gamma API")
-    print("=" * 60)
-    print(f"  volume_num_min : {VOLUME_NUM_MIN:,}")
-    print(f"  start_date_min : {start_date_min}\n")
+def _date_windows(start: str, end: str, months: int = 1):
+    """Yield (window_start, window_end) string pairs in N-month chunks."""
+    current = pd.Timestamp(start)
+    target  = pd.Timestamp(end)
+    while current < target:
+        wend = min(current + pd.DateOffset(months=months), target)
+        yield current.strftime("%Y-%m-%d"), wend.strftime("%Y-%m-%d")
+        current = wend
 
-    all_markets = []
-    offset = 0
-    consecutive_failures = 0
-    MAX_CONSECUTIVE_FAILURES = 3
+
+def _fetch_window(start_date: str, end_date: str, depth: int = 0) -> list[dict]:
+    """Offset-paginate one date window.
+
+    If the API returns 422 (offset cap hit), automatically splits the window
+    in half and recurses — handles high-volume months like election periods.
+    Max recursion depth of 6 gives windows as small as ~half a day.
+    """
+    MAX_DEPTH = 6
+    markets   = []
+    offset    = 0
+    failures  = 0
 
     while True:
         params = {
@@ -117,54 +127,101 @@ def fetch_all_markets(start_date_min: str = START_DATE_MIN) -> list[dict]:
             "order":          "startDate",
             "ascending":      "true",
             "volume_num_min": VOLUME_NUM_MIN,
-            "start_date_min": start_date_min,
+            "start_date_min": start_date,
+            "start_date_max": end_date,
         }
 
-        batch = None
+        cap_hit = False
+        batch   = None
+
         for attempt in range(1, MAX_RETRIES + 1):
             try:
                 r = requests.get(f"{GAMMA_URL}/markets", params=params, timeout=20)
+                if r.status_code == 422:
+                    cap_hit = True
+                    break
                 r.raise_for_status()
-                batch = r.json()
+                batch   = r.json()
+                failures = 0
                 break
             except Exception as e:
+                if hasattr(e, "response") and getattr(e.response, "status_code", None) == 422:
+                    cap_hit = True
+                    break
                 wait = RETRY_BACKOFF * (2 ** (attempt - 1))
                 if attempt < MAX_RETRIES:
-                    print(f"  Error at offset {offset} (attempt {attempt}/{MAX_RETRIES}): {e} "
-                          f"— retrying in {wait}s")
+                    print(f"    offset {offset} attempt {attempt}/{MAX_RETRIES}: {e} — retry in {wait}s")
                     time.sleep(wait)
                 else:
-                    print(f"  Error at offset {offset} (attempt {attempt}/{MAX_RETRIES}): {e} "
-                          f"— skipping offset.")
+                    print(f"    offset {offset}: all retries failed — skipping")
+
+        if cap_hit:
+            if depth < MAX_DEPTH:
+                # Split window in half and recurse
+                mid = (pd.Timestamp(start_date) +
+                       (pd.Timestamp(end_date) - pd.Timestamp(start_date)) / 2
+                       ).strftime("%Y-%m-%d")
+                if mid <= start_date:
+                    print(f"    WARNING: window too small to split: {start_date} → {end_date}")
+                    break
+                indent = "  " * depth
+                print(f"    {indent}↳ cap hit — splitting {start_date}→{end_date} at {mid}")
+                left  = _fetch_window(start_date, mid, depth + 1)
+                right = _fetch_window(mid, end_date, depth + 1)
+                return markets + left + right
+            else:
+                print(f"    WARNING: hit cap at max depth ({MAX_DEPTH}) for {start_date}→{end_date}")
+            break
 
         if batch is None:
-            consecutive_failures += 1
-            if consecutive_failures >= MAX_CONSECUTIVE_FAILURES:
-                print(f"  {consecutive_failures} consecutive batch failures — stopping fetch.")
+            failures += 1
+            if failures >= 3:
                 break
             offset += MARKET_FETCH_LIMIT
             continue
 
-        consecutive_failures = 0  # reset on success
-
         if not batch:
-            print(f"  Empty batch at offset {offset} — done.")
             break
 
-        all_markets.extend(batch)
+        markets.extend(batch)
+        offset += MARKET_FETCH_LIMIT
+        time.sleep(SLEEP_BETWEEN_CALLS)
 
-        oldest = batch[0].get("startDate", "?")[:10]
-        newest = batch[-1].get("startDate", "?")[:10]
-        print(f"  offset {offset:>6} | batch {len(batch):>4} | "
-              f"dates {oldest} → {newest} | total {len(all_markets):>6}")
+    return markets
+
+
+def fetch_all_markets(start_date_min: str = START_DATE_MIN) -> list[dict]:
+    """Fetch all markets using monthly date windows to avoid the API 2500-record offset cap."""
+    from datetime import date as _date
+    today   = _date.today().strftime("%Y-%m-%d")
+    windows = list(_date_windows(start_date_min, today, months=1))
+
+    print("=" * 60)
+    print("STEP 1: Fetching markets from Gamma API")
+    print("=" * 60)
+    print(f"  volume_num_min : {VOLUME_NUM_MIN:,}")
+    print(f"  windows        : {len(windows)} monthly ({start_date_min} → {today})\n")
+
+    all_markets = []
+    seen_ids    = set()
+
+    for i, (wstart, wend) in enumerate(windows, 1):
+        batch = _fetch_window(wstart, wend)
+        new   = []
+        for m in batch:
+            mid = m.get("conditionId") or str(m.get("id"))
+            if mid not in seen_ids:
+                seen_ids.add(mid)
+                new.append(m)
+        all_markets.extend(new)
+        if new or batch:
+            print(f"  [{i:>3}/{len(windows)}] {wstart} → {wend}  "
+                  f"+{len(new):>4} markets  total {len(all_markets):>6}")
 
         if MAX_MARKETS and len(all_markets) >= MAX_MARKETS:
             all_markets = all_markets[:MAX_MARKETS]
             print(f"  Hit MAX_MARKETS cap ({MAX_MARKETS}).")
             break
-
-        offset += MARKET_FETCH_LIMIT
-        time.sleep(SLEEP_BETWEEN_CALLS)
 
     print(f"\nTotal markets fetched: {len(all_markets):,}")
     return all_markets
