@@ -84,3 +84,4 @@ Originally NYU DS-GA 1003 (team of 3). Now being productionized into a full-stac
 - ADR-010: database design (Supabase, 5-table schema)
 - ADR-011: offline/online split (parquet vs DB)
 - ADR-012: S3 + DuckDB data lake
+- ADR-013: keyset pagination for market fetch + full re-fetch (split recomputed)

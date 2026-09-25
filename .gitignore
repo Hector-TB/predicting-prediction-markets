@@ -2,6 +2,7 @@
 # Sync with: python data/sync.py pull / push
 data/*.parquet
 data/*.csv
+data/fetch_cache/
 
 # Notebooks
 testing.ipynb
