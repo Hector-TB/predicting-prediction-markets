@@ -43,8 +43,9 @@ MIN_DURATION_DAYS   = 30            # no upper bound
 OUTCOME_THRESHOLD   = 0.95          # outcomePrices[0] >= this → YES, <= 0.05 → NO
 
 SLEEP_BETWEEN_CALLS = 0.15
-MAX_RETRIES         = 5         # retries per offset on server error
-RETRY_BACKOFF       = 5         # seconds to wait before first retry (doubles each attempt)
+MAX_RETRIES         = 8         # attempts per page; Gamma has multi-minute 500 outages
+RETRY_BACKOFF       = 5         # seconds before first retry (doubles each attempt)
+RETRY_BACKOFF_MAX   = 60        # cap per wait → ~4 min total before failing loudly
 
 OUTPUT_META         = DATA_DIR / "polymarket_markets_meta.csv"
 FETCH_CACHE_DIR     = DATA_DIR / "fetch_cache"   # per-window checkpoints for --full
@@ -149,7 +150,7 @@ def _fetch_window(start_date: str, end_date: str) -> list[dict]:
                         f"Gamma keyset page failed {MAX_RETRIES}x for "
                         f"{start_date} → {end_date} (cursor={cursor}): {e}"
                     ) from e
-                wait = RETRY_BACKOFF * (2 ** (attempt - 1))
+                wait = min(RETRY_BACKOFF * (2 ** (attempt - 1)), RETRY_BACKOFF_MAX)
                 log.warning("    %s → %s attempt %d/%d: %s — retry in %ds",
                             start_date, end_date, attempt, MAX_RETRIES, e, wait)
                 time.sleep(wait)
@@ -186,8 +187,8 @@ def fetch_filtered_markets(start_date_min: str, cache_dir: Optional[Path] = None
         cache_file = cache_dir / f"{wstart}_{wend}.csv" if cache_dir else None
         if cache_file and cache_file.exists():
             df = pd.read_csv(cache_file)
-            df["start_date"] = pd.to_datetime(df["start_date"], utc=True)
-            df["end_date"]   = pd.to_datetime(df["end_date"], utc=True)
+            df["start_date"] = pd.to_datetime(df["start_date"], utc=True, format="ISO8601")
+            df["end_date"]   = pd.to_datetime(df["end_date"], utc=True, format="ISO8601")
             log.info("  [%3d/%d] %s → %s  %5d passing (cached)", i, len(windows), wstart, wend, len(df))
         else:
             raw = _fetch_window(wstart, wend)
