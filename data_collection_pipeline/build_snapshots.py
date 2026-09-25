@@ -163,19 +163,22 @@ def compute_snapshots(market: pd.Series, price_df: pd.DataFrame) -> Optional[pd.
 # ─────────────────────────────────────────────
 
 def load_processed_ids() -> set:
-    """Resume support — check CSV first, fall back to parquet if no CSV exists."""
+    """Resume support — union of markets in the in-progress CSV and the merged parquet.
+
+    The CSV only holds markets from the current (possibly interrupted) run, so it
+    must never replace the parquet as the source of already-processed IDs.
+    """
+    ids = set()
     if OUTPUT_DATASET.exists():
-        existing = pd.read_csv(OUTPUT_DATASET, usecols=["market_id"])
-        ids = set(existing["market_id"].unique())
-        print(f"  Resuming — {len(ids):,} already-processed markets in CSV")
-        return ids
+        csv_ids = set(pd.read_csv(OUTPUT_DATASET, usecols=["market_id"])["market_id"].unique())
+        print(f"  Resuming — {len(csv_ids):,} already-processed markets in CSV")
+        ids |= csv_ids
     parquet_path = OUTPUT_DATASET.with_suffix(".parquet")
     if parquet_path.exists():
-        existing = pd.read_parquet(parquet_path, columns=["market_id"])
-        ids = set(existing["market_id"].unique())
-        print(f"  Resuming — {len(ids):,} already-processed markets in parquet (no CSV found)")
-        return ids
-    return set()
+        pq_ids = set(pd.read_parquet(parquet_path, columns=["market_id"])["market_id"].unique())
+        print(f"  Resuming — {len(pq_ids):,} already-processed markets in parquet")
+        ids |= pq_ids
+    return ids
 
 def append_to_dataset(snap_df: pd.DataFrame, first_write: bool):
     snap_df.to_csv(OUTPUT_DATASET, mode="a", header=first_write, index=False)
