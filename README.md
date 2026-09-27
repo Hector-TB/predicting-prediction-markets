@@ -2,7 +2,7 @@
 
 ML models trained on historical [Polymarket](https://polymarket.com) binary prediction market data to forecast YES/NO outcomes. The core question: **can ML beat the market's own implied probability?**
 
-Originally a course project (NYU DS-GA 1003, team of 3). Now being productionized into a full-stack application.
+Originally a course project (NYU DS-GA 1003, team of 3); the paper is in [`docs/paper/`](docs/paper/). Now being productionized into a full-stack application.
 
 **Team:** Dhairya Dhamani, Hector Thompson Baroni, Sachin Sastri
 
@@ -12,9 +12,9 @@ Originally a course project (NYU DS-GA 1003, team of 3). Now being productionize
 
 | | Question |
 |---|---|
-| **RQ1** | Can ML models outperform prediction market probabilities in forecasting outcomes? |
-| **RQ2** | Do engineered features beyond market price enhance predictive performance? |
-| **RQ3** | At which stage of a market's lifecycle do external signals provide the most value? |
+| **RQ1** | Can ML outperform market probabilities? |
+| **RQ2** | Do Google Trends features add predictive value? |
+| **RQ3** | How do model predictions vary across the market lifecycle? |
 
 ---
 
@@ -34,7 +34,7 @@ python data/sync.py pull
 `.env` requires:
 - `DATABASE_URL` — Supabase Postgres connection string
 - `AWS_ACCESS_KEY_ID` / `AWS_SECRET_ACCESS_KEY` / `S3_BUCKET` — S3 data lake
-- `ANTHROPIC_API_KEY` — only needed to re-run `categorize_markets.py`
+- `ANTHROPIC_API_KEY` — only needed to re-run `categorize_markets.py` (loaded from `.env`)
 
 See `.env.example` for the full list.
 
@@ -46,23 +46,27 @@ See `.env.example` for the full list.
 predicting-prediction-markets/
 ├── data/                              # parquet/CSV data files (gitignored — live on S3)
 │   └── sync.py                        # push/pull data files to/from S3
-├── data_collection_pipeline/          # ETL scripts — run in numbered order
-│   ├── fetch_markets.py               # Step 1: fetch resolved markets from Gamma API
+├── data_collection_pipeline/          # ETL scripts — run_pipeline.py runs them in order
+│   ├── run_pipeline.py                # end-to-end runner (steps 1–8)
+│   ├── fetch_markets.py               # Step 1: resolved markets from Gamma API (keyset pagination)
 │   ├── build_snapshots.py             # Step 2: 12-hour snapshot dataset + rolling features
-│   ├── fix_dataset.py                 # Step 3: dedupe, clip prices, fill NaN features
+│   ├── fix_dataset.py                 # Step 3: dedupe, clip prices, fill NaN features, merge to parquet
 │   ├── categorize_markets.py          # Step 4: LLM category assignment (Claude API)
-│   ├── fetch_category_trends.py       # Step 5a: pull Google Trends data
-│   ├── build_trend_features.py        # Step 5b: compute trend features
-│   ├── merge_trends.py                # Step 5c: merge trends into snapshot dataset
-│   └── fix_leakage.py                 # Step 6: remove post-resolution snapshots
+│   ├── fetch_category_trends.py       # Step 5: pull Google Trends data
+│   ├── build_trend_features.py        # Step 6: compute trend features
+│   ├── merge_trends.py                # Step 7: merge trends into snapshot dataset
+│   └── fix_leakage.py                 # Step 8: remove post-close and settled snapshots
 ├── models/
 │   ├── common/                        # shared evaluation utilities (evaluation.py)
 │   ├── logistic_regression/           # train.py + notebook + predictions/
 │   ├── gradient_boosting/             # XGBoost: train.py + notebook + predictions/
-│   ├── random_forest/                 # notebook only (train.py not yet written)
-│   ├── random_forest_trends/          # notebook only (train.py not yet written)
+│   ├── random_forest/                 # train.py + notebook + predictions/
+│   ├── random_forest_trends/          # train.py + notebook + predictions/
 │   ├── svm/                           # svm.py + svm_evaluate.py + notebook
 │   └── lightgbm/                      # placeholder (not yet implemented)
+├── scripts/
+│   ├── print_metrics.py               # metrics table for all models vs the market baseline
+│   └── recompute_split.py             # recompute the 80/20 split after a full re-fetch
 ├── analysis/
 │   ├── analysis.ipynb                 # model comparison, lift curves, calibration
 │   ├── trading_simulation.ipynb       # simulated trading strategy from predictions
@@ -71,7 +75,8 @@ predicting-prediction-markets/
 │   ├── load_parquet.py                # migrate metadata + model registry to Supabase
 │   └── migrations/                    # SQL migration files (apply via Supabase MCP)
 ├── docs/
-│   └── decisions/                     # Architecture Decision Records (ADR-001–012)
+│   ├── decisions/                     # Architecture Decision Records (ADR-001–014)
+│   └── paper/                         # course paper (LaTeX) + notes on its results
 ├── plots/                             # generated PNGs (gitignored)
 ├── .env.example
 ├── pyproject.toml
@@ -82,29 +87,19 @@ predicting-prediction-markets/
 
 ## Data Pipeline
 
-Run steps in order. All scripts resolve paths relative to `__file__`.
+All scripts resolve paths relative to `__file__`. The runner executes every step in order:
 
 ```bash
-# Step 1: fetch resolved markets from Gamma API
-python data_collection_pipeline/fetch_markets.py
-
-# Step 2: build 12-hour snapshot dataset + rolling features
-python data_collection_pipeline/build_snapshots.py
-
-# Step 3: data quality fixes (dedupe, clip, NaN fill)
-python data_collection_pipeline/fix_dataset.py
-
-# Step 4: LLM category assignment (requires ANTHROPIC_API_KEY)
-ANTHROPIC_API_KEY=... python data_collection_pipeline/categorize_markets.py
-
-# Step 5: Google Trends enrichment
-python data_collection_pipeline/fetch_category_trends.py
-python data_collection_pipeline/build_trend_features.py
-python data_collection_pipeline/merge_trends.py
-
-# Step 6: remove post-resolution snapshots (data leakage fix — see ADR-005)
-python data_collection_pipeline/fix_leakage.py
+python data_collection_pipeline/run_pipeline.py                   # full incremental refresh
+python data_collection_pipeline/run_pipeline.py --skip-snapshots   # skip steps 1–2
+python data_collection_pipeline/run_pipeline.py --trends-only      # steps 5–8 only
 ```
+
+Notes:
+- `fetch_markets.py --full` re-fetches every market since 2023 with resumable checkpoints; run `scripts/recompute_split.py` afterwards (ADR-013).
+- `build_snapshots.py` resumes from where it stopped; a full rebuild takes many hours.
+- `categorize_markets.py` needs `ANTHROPIC_API_KEY` and only sends markets that aren't categorized yet.
+- `fix_leakage.py` drops snapshots after each market's API `closedTime` and any snapshot priced ≥ 0.95 or ≤ 0.05 (ADR-005, ADR-014).
 
 After re-running the pipeline, push updated files to S3:
 ```bash
@@ -118,41 +113,48 @@ python data/sync.py push
 ```bash
 python models/logistic_regression/train.py
 python models/gradient_boosting/train.py
+python models/random_forest/train.py
+python models/random_forest_trends/train.py
 python models/svm/svm.py && python models/svm/svm_evaluate.py
+
+python scripts/print_metrics.py   # all models vs the market baseline, on the same test set
 ```
 
-Shared evaluation utilities (AUC-ROC, PR-AUC, log-loss, Brier, calibration) are in `models/common/evaluation.py`.
+All models train on the leakage-filtered `_clean` parquet files. Shared evaluation utilities (AUC-ROC, PR-AUC, log-loss, Brier, calibration) are in `models/common/evaluation.py`.
 
 ---
 
-## Results (test set, 288,490 snapshots across 4,174 markets)
+## Results (course paper, test set of 288,490 snapshots across 4,174 markets)
 
-> **Outdated (2026-09-27).** These are the course-era results. The 0.964 / 0.171 baseline does not reproduce on the clean parquet these models were scored on: `scripts/print_metrics.py` gives the market price AUC 0.8905 / log-loss 0.330 there, below RF's 0.902 AUC, so the "no model beats the baseline" finding below is unverified. The dataset is being rebuilt under ADR-013/014, and every model and the baseline must be re-scored on it before drawing conclusions.
+> **Re-measurement pending.** These are the paper's results. They were measured on data where the `closedTime` leakage pass never actually ran and a 14-day grace period kept near-settled snapshots (ADR-014). The dataset is being rebuilt under ADR-013/014, and every model and the baseline will be re-scored on it before these numbers are quoted again. See [`docs/paper/README.md`](docs/paper/README.md).
 
-**Baseline — market price alone:** AUC-ROC = **0.964**, log-loss = **0.171**
+The baseline is the market price itself (`price_at_snapshot` as a probability), scored on the same test set.
 
-The market price is a near-perfect predictor. Beating it is the bar for RQ1.
+| Model | AUC-ROC | PR-AUC | Log-loss | Brier |
+|---|---|---|---|---|
+| Market price (baseline) | 0.8890 | 0.7440 | 0.3278 | 0.1004 |
+| Logistic regression | 0.8874 | 0.7101 | 0.3317 | 0.0980 |
+| Logistic regression + Trends | 0.8868 | 0.7096 | 0.3301 | 0.0980 |
+| XGBoost | 0.9000 | 0.7445 | 0.3073 | 0.0941 |
+| XGBoost + Trends | 0.9019 | 0.7525 | 0.3043 | 0.0930 |
+| Random forest | 0.9018 | 0.7527 | 0.3027 | 0.0922 |
+| **Random forest + Trends** | **0.9034** | **0.7598** | **0.3011** | **0.0914** |
 
-| Model | AUC-ROC | Log-loss | Notes |
-|---|---|---|---|
-| Market price (baseline) | **0.964** | **0.171** | `price_at_snapshot` as the predictor |
-| XGBoost + trends (calibrated) | 0.9034 | 0.3034 | Best ML model |
-| XGBoost + trends | 0.9023 | 0.3070 | |
-| Random forest + trends (calibrated) | 0.9019 | 0.3042 | |
-| XGBoost base | 0.9000 | 0.3108 | |
-| Random forest (calibrated) | 0.9018 | 0.3042 | |
-| Random forest (full) | 0.9021 | 0.3635 | Uncalibrated RF overestimates |
-| Logistic regression base | 0.8874 | 0.3451 | |
-| Logistic regression + trends | 0.8868 | 0.3410 | |
-| Random forest (price-only) | 0.8891 | 0.4194 | |
+SVM (AUC ≈ 0.94) was scored on a different subsample (7 lifetime-percentile snapshots per market) and isn't comparable to the rows above.
 
-**Key finding:** No model beats the market baseline on either metric. The market's implied probability is already near-optimal. This is consistent with the efficient markets hypothesis — Polymarket's price aggregates information that ML features cannot improve upon in aggregate. The value of ML is likely in identifying specific market conditions or time windows where the model has an edge, not overall accuracy improvement.
+**Key findings (paper):**
+- **RQ1:** Tree models beat the market on every metric (best: +0.014 AUC, −0.027 log-loss). Logistic regression doesn't, which suggests the signal comes from non-linear interactions between price, lifecycle position and volatility.
+- **RQ2:** Google Trends adds small, consistent gains for tree models (+0.001–0.002 AUC), mostly in geopolitics and finance.
+- **RQ3:** The models add the most early in a market's life (+0.016–0.019 AUC over the market in the first third, shrinking to +0.003–0.006 in the last third).
+- **Trading simulation:** XGBoost + Trends showed a 27.5% ROI with no transaction costs. It counts every snapshot as a separate trade and includes trades at stale post-close prices, so treat it as an upper bound.
 
-Google Trends and calibration both help at the margin; XGBoost is the strongest architecture.
+The README previously quoted a 0.964 AUC baseline. That number came from the unfiltered dataset, so it was not comparable to the models.
 
 ---
 
 ## Dataset
+
+> The figures in this section describe the course-era dataset (20,948 markets). The ADR-013 full re-fetch expanded the market list to 45,143 markets, and the snapshot dataset is being rebuilt from it; the counts below will be updated once the rebuild finishes.
 
 ### Canonical files (on S3 — fetch with `python data/sync.py pull`)
 
@@ -248,7 +250,7 @@ Supabase Postgres (operational layer — not used for training). Schema: `market
 python db/load_parquet.py
 ```
 
-Pending migration (apply once DB is healthy): `db/migrations/004_add_model_run_metrics.sql`
+`001_initial_schema.sql` already includes the `model_runs` metrics and hyperparameter JSONB columns that `004_add_model_run_metrics.sql` adds.
 
 See ADR-010 (database design) and ADR-011 (offline/online split).
 
@@ -264,7 +266,7 @@ All significant decisions are documented in `docs/decisions/`. These are the aud
 | [ADR-002](docs/decisions/002-snapshot-window-design.md) | Snapshot window: `createdAt + 14d` to `endDate − 14d` |
 | [ADR-003](docs/decisions/003-rolling-window-selection.md) | Rolling windows: 7d and 14d |
 | [ADR-004](docs/decisions/004-outcome-threshold.md) | Outcome threshold: `yes_final_price ≥ 0.95` → YES |
-| [ADR-005](docs/decisions/005-leakage-fix.md) | Remove post-resolution snapshots (price crossed 0.95/0.05) |
+| [ADR-005](docs/decisions/005-leakage-fix.md) | Remove post-resolution snapshots (revised by ADR-014) |
 | [ADR-006](docs/decisions/006-svm-subsampling.md) | SVM subsampling: 7 fixed percentile snapshots per market |
 | [ADR-007](docs/decisions/007-class-imbalance.md) | Class imbalance: `class_weight='balanced'` throughout |
 | [ADR-008](docs/decisions/008-market-filters.md) | Market filters: volume ≥ $1k, duration ≥ 30 days |
@@ -272,6 +274,8 @@ All significant decisions are documented in `docs/decisions/`. These are the aud
 | [ADR-010](docs/decisions/010-database-design.md) | PostgreSQL via Supabase; 5-table schema |
 | [ADR-011](docs/decisions/011-offline-online-split.md) | Parquet for training; DB for live/operational layer only |
 | [ADR-012](docs/decisions/012-s3-duckdb-data-lake.md) | S3 + DuckDB as the data lake; parquet removed from git |
+| [ADR-013](docs/decisions/013-keyset-pagination-full-refetch.md) | Keyset pagination for market fetch; full re-fetch with recomputed split |
+| [ADR-014](docs/decisions/014-leakage-filter-closedtime-and-settled-rows.md) | Leakage filter: working `closedTime` lookup; drop snapshots priced ≥ 0.95 / ≤ 0.05 |
 
 ---
 
