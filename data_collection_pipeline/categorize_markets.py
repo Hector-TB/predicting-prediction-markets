@@ -22,6 +22,8 @@ Run after fetch_markets.py and build_snapshots.py.
 import anthropic
 import pandas as pd
 from dotenv import load_dotenv
+
+from stream_parquet import rewrite
 import json
 import sys
 import time
@@ -254,12 +256,13 @@ def main():
     # Keep NaN as NaN (astype(str) would turn it into the string "nan")
     cat_map = dict(zip(meta["market_id"].astype(str), meta["category"]))
 
-    df = pd.read_parquet(DATASET_PARQUET)
-    df["category"] = df["market_id"].astype(str).map(cat_map).fillna("other")
-    tmp_path = DATASET_PARQUET.with_suffix(".tmp.parquet")
-    df.to_parquet(tmp_path, index=False)
-    tmp_path.replace(DATASET_PARQUET)
-    print(f"Saved updated categories to {DATASET_PARQUET} ({len(df):,} rows)")
+    def stamp(df: pd.DataFrame) -> pd.DataFrame:
+        df["category"] = df["market_id"].astype(str).map(cat_map).fillna("other")
+        return df
+
+    # Streamed in batches: the full dataset doesn't fit in memory on 8 GB machines
+    _, rows = rewrite(DATASET_PARQUET, DATASET_PARQUET, stamp)
+    print(f"Saved updated categories to {DATASET_PARQUET} ({rows:,} rows)")
 
     print(f"\n{'=' * 60}")
     print(f"  {'STOPPED EARLY — re-run to finish' if stopped_early else 'COMPLETE'}")

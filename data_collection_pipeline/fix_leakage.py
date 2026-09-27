@@ -19,6 +19,9 @@ import pathlib
 import time
 import requests
 import pandas as pd
+import pyarrow.parquet as pq
+
+from stream_parquet import FrameWriter, iter_frames, unique_values
 
 # ─────────────────────────────────────────────
 # PATHS
@@ -142,7 +145,8 @@ def inactivity_cutoffs(df: pd.DataFrame) -> pd.Series:
     return cutoff.clip(upper=HARD_CUTOFF)
 
 
-def filter_snapshots(df: pd.DataFrame, closed_times: pd.DataFrame) -> tuple[pd.DataFrame, dict]:
+def filter_snapshots(df: pd.DataFrame, closed_times: pd.DataFrame,
+                     inactive_cutoffs: pd.Series | None = None) -> tuple[pd.DataFrame, dict]:
     """
     Four-pass leakage filter (ADR-005, revised by ADR-014). Returns (clean_df, removed_counts).
 
@@ -154,6 +158,10 @@ def filter_snapshots(df: pd.DataFrame, closed_times: pd.DataFrame) -> tuple[pd.D
       Pass 3 — inactivity:  markets WITHOUT a closedTime only — drop rows more than
                             INACTIVITY_DAYS after the last price change.
       Pass 4 — hard cap:    drop rows after HARD_CUTOFF (tomorrow midnight UTC).
+
+    Pass 3 needs each market's full history. When filtering in batches, pass
+    `inactive_cutoffs` precomputed over the whole file (see load_inactivity_cutoffs);
+    otherwise they are computed from `df` itself.
     """
     df = df.copy()
     df["snapshot_timestamp"] = pd.to_datetime(df["snapshot_timestamp"], format="mixed", utc=True)
@@ -177,7 +185,9 @@ def filter_snapshots(df: pd.DataFrame, closed_times: pd.DataFrame) -> tuple[pd.D
     # ── Pass 3: inactivity, only where closedTime is unknown ─
     no_ct = df["closed_time"].isna()
     if no_ct.any():
-        cutoffs = inactivity_cutoffs(df.loc[no_ct]).rename("inactive_cutoff")
+        if inactive_cutoffs is None:
+            inactive_cutoffs = inactivity_cutoffs(df.loc[no_ct])
+        cutoffs = inactive_cutoffs.rename("inactive_cutoff")
         df = df.merge(cutoffs.reset_index(), on="market_id", how="left")
         keep = df["inactive_cutoff"].isna() | (df["snapshot_timestamp"] <= df["inactive_cutoff"])
         df = df.loc[keep].drop(columns=["inactive_cutoff"])
@@ -193,29 +203,57 @@ def filter_snapshots(df: pd.DataFrame, closed_times: pd.DataFrame) -> tuple[pd.D
     return df, removed
 
 
+def load_inactivity_cutoffs(path: pathlib.Path, closed_times: pd.DataFrame) -> pd.Series:
+    """
+    Pass-3 cutoffs for markets without a closedTime, computed from just those
+    markets' rows (read with a filter, so the full file is never loaded). Uses
+    the rows that survive Pass 2, matching filter_snapshots on a whole frame.
+    """
+    no_ct = closed_times.loc[closed_times["closed_time"].isna(), "market_id"].tolist()
+    if not no_ct:
+        return pd.Series(dtype="datetime64[ns, UTC]", name="inactive_cutoff")
+    sub = pq.read_table(
+        path,
+        columns=["market_id", "snapshot_timestamp", "price_at_snapshot"],
+        filters=[("market_id", "in", no_ct)],
+    ).to_pandas()
+    sub["snapshot_timestamp"] = pd.to_datetime(sub["snapshot_timestamp"], format="mixed", utc=True)
+    settled = (sub["price_at_snapshot"] >= PRICE_THRESHOLD) | \
+              (sub["price_at_snapshot"] <= 1 - PRICE_THRESHOLD)
+    return inactivity_cutoffs(sub.loc[~settled])
+
+
 def filter_parquet(
     input_path: pathlib.Path,
     output_path: pathlib.Path,
     closed_times: pd.DataFrame,
 ) -> None:
-    """Apply filter_snapshots to input_path and write output_path (input is never modified)."""
-    print(f"\n  Reading {input_path.name} ...")
-    df = pd.read_parquet(input_path)
-    original_rows = len(df)
-    print(f"  Rows before: {original_rows:,}")
+    """Apply filter_snapshots to input_path in batches and write output_path (input is never modified)."""
+    print(f"\n  Filtering {input_path.name} in batches ...")
     print(f"  Markets with closedTime: {closed_times['closed_time'].notna().sum():,} / {len(closed_times):,}")
 
-    df_clean, removed = filter_snapshots(df, closed_times)
+    cutoffs = load_inactivity_cutoffs(input_path, closed_times)
+    original_rows = 0
+    removed: dict[str, int] = {}
+    max_ts = None
+    with FrameWriter(output_path) as out:
+        for df in iter_frames(input_path):
+            original_rows += len(df)
+            df_clean, batch_removed = filter_snapshots(df, closed_times, cutoffs)
+            for name, n in batch_removed.items():
+                removed[name] = removed.get(name, 0) + n
+            if len(df_clean):
+                batch_max = df_clean["snapshot_timestamp"].max()
+                max_ts = batch_max if max_ts is None else max(max_ts, batch_max)
+            out.write(df_clean)
 
-    total_removed = original_rows - len(df_clean)
+    total_removed = original_rows - out.rows
+    print(f"  Rows before: {original_rows:,}")
     for name, n in removed.items():
         print(f"  Removed — {name + ':':<15} {n:,}")
-    print(f"  Total removed:         {total_removed:,} ({total_removed/original_rows:.2%})")
-    print(f"  Rows after:            {len(df_clean):,}")
-    print(f"  Max snapshot:          {df_clean['snapshot_timestamp'].max()}")
-
-    print(f"  Writing {output_path.name} ...")
-    df_clean.to_parquet(output_path, index=False)
+    print(f"  Total removed:         {total_removed:,} ({total_removed/max(original_rows, 1):.2%})")
+    print(f"  Rows after:            {out.rows:,}")
+    print(f"  Max snapshot:          {max_ts}")
     print(f"  Saved → {output_path}")
 
 
@@ -243,10 +281,7 @@ def main():
     print("=" * 60)
 
     # Read market IDs from the parquet so we cover all markets, not just the meta CSV
-    market_ids = (
-        pd.read_parquet(PARQUET_MAIN, columns=["market_id"])["market_id"]
-        .unique().tolist()
-    )
+    market_ids = sorted(unique_values(PARQUET_MAIN, "market_id"))
     print(f"  Markets in parquet: {len(market_ids):,}")
     closed_times = fetch_closed_times(market_ids)
 
