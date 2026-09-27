@@ -23,6 +23,7 @@ import anthropic
 import pandas as pd
 from dotenv import load_dotenv
 import json
+import sys
 import time
 from pathlib import Path
 from typing import Optional
@@ -101,6 +102,17 @@ OUTPUT_SCHEMA = {
 # CLASSIFY BATCH
 # ─────────────────────────────────────────────
 
+class FatalAPIError(Exception):
+    """An error no retry can fix (billing, auth) — stop the run and save progress."""
+
+
+def _is_fatal(e: Exception) -> bool:
+    if isinstance(e, (anthropic.AuthenticationError, anthropic.PermissionDeniedError)):
+        return True
+    # Out of credits comes back as a 400 invalid_request_error
+    return isinstance(e, anthropic.BadRequestError) and "credit balance" in str(e).lower()
+
+
 def classify_batch(client: anthropic.Anthropic,
                    batch: list[dict]) -> Optional[list[Optional[str]]]:
     """
@@ -134,6 +146,8 @@ def classify_batch(client: anthropic.Anthropic,
             return cats
 
         except Exception as e:
+            if _is_fatal(e):
+                raise FatalAPIError(str(e)) from e
             wait = 2 ** attempt
             if attempt < MAX_RETRIES:
                 print(f"    Attempt {attempt}/{MAX_RETRIES} failed: {e} — retrying in {wait}s")
@@ -170,6 +184,7 @@ def main():
     print(f"  Already categorised: {already_done:,}")
     print(f"  Need categorisation: {len(needs_category):,}")
 
+    stopped_early = False
     if needs_category.empty:
         print("\nAll markets already categorised.")
     else:
@@ -193,7 +208,13 @@ def main():
             print(f"  [{pct:5.1f}%] Batch {b+1}/{n_batches} ({len(batch)} markets)...",
                   end=" ", flush=True)
 
-            categories = classify_batch(client, batch)
+            try:
+                categories = classify_batch(client, batch)
+            except FatalAPIError as e:
+                stopped_early = True
+                print(f"\n\n  STOPPING — {e}")
+                print("  Saving what was classified so far; re-run to continue.")
+                break
 
             if categories:
                 all_categories[start : start + len(batch)] = categories
@@ -225,13 +246,13 @@ def main():
     # ── Update dataset parquet ────────────────
     if not DATASET_PARQUET.exists():
         print(f"\n{DATASET_PARQUET} not found — skipping dataset update.")
-        return
+        sys.exit(1 if stopped_early else 0)
 
     print(f"\nUpdating categories in {DATASET_PARQUET}...")
 
     # Build market_id -> category mapping from updated meta
-    cat_map = dict(zip(meta["market_id"].astype(str),
-                       meta["category"].astype(str)))
+    # Keep NaN as NaN (astype(str) would turn it into the string "nan")
+    cat_map = dict(zip(meta["market_id"].astype(str), meta["category"]))
 
     df = pd.read_parquet(DATASET_PARQUET)
     df["category"] = df["market_id"].astype(str).map(cat_map).fillna("other")
@@ -241,8 +262,11 @@ def main():
     print(f"Saved updated categories to {DATASET_PARQUET} ({len(df):,} rows)")
 
     print(f"\n{'=' * 60}")
-    print(f"  COMPLETE")
+    print(f"  {'STOPPED EARLY — re-run to finish' if stopped_early else 'COMPLETE'}")
     print(f"{'=' * 60}")
+    # Non-zero exit so run_pipeline.py reports the step as incomplete
+    if stopped_early:
+        sys.exit(1)
 
 
 if __name__ == "__main__":
