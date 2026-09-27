@@ -1,6 +1,6 @@
 # CLAUDE.md — Predicting Prediction Markets
 
-<!-- When compacting: preserve the active data split (train=80%/test=20% temporal at market level), current ADR count (ADR-001 through ADR-018), and any files modified this session. -->
+<!-- When compacting: preserve the active data split (train=80%/test=20% temporal at market level), current ADR count (ADR-001 through ADR-019), and any files modified this session. -->
 
 This file is read by Claude Code at the start of every session. Keep it under 200 lines.
 
@@ -99,3 +99,4 @@ Dataset versions: **v1** = the course-project dataset the paper used (20,948 mar
 - ADR-016: immutable dataset versions on S3 (`datasets/vN/` + manifest); `sync.py publish/pull`
 - ADR-017: on-demand prediction via search + stored live track record (design: `docs/design/search-and-predict.md`)
 - ADR-018 (Proposed): volume features use final lifetime volume — look-ahead; fix before live prediction
+- ADR-019: immutable model releases (rN) with change reports, gated promotion, one-command rollback
