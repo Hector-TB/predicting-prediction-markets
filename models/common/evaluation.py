@@ -89,18 +89,44 @@ def check_calibration(y_true, y_prob, n_bins=10):
     print(f"{'─'*50}")
 
 
-def bootstrap_auc_diff(y_true, y_prob_base, y_prob_new, n_boot: int = 1000, seed: int = 42):
+def compute_metrics(y_true, y_prob) -> dict:
+    """AUC-ROC, PR-AUC, log-loss and Brier as a dict (the quiet counterpart of `evaluate`)."""
+    y_prob = np.clip(y_prob, 1e-6, 1 - 1e-6)
+    return {
+        "auc":    roc_auc_score(y_true, y_prob),
+        "pr_auc": average_precision_score(y_true, y_prob),
+        "log_loss": log_loss(y_true, y_prob),
+        "brier":  brier_score_loss(y_true, y_prob),
+        "n":      len(y_true),
+    }
+
+
+def bootstrap_auc_diff(y_true, y_prob_base, y_prob_new, n_boot: int = 1000, seed: int = 42,
+                       groups=None, verbose: bool = True):
     """
     Bootstrap 95% CI on (AUC_new − AUC_base).
 
     Reports the point estimate, CI, and a one-sided p-value for H0: diff <= 0.
     Use this to test whether a Trends-enriched model genuinely beats its baseline.
+
+    Pass `groups` (e.g. market_id per row) to resample whole groups instead of
+    rows. Snapshots from the same market are strongly correlated, so resampling
+    rows understates the uncertainty; resample markets for honest CIs.
     """
     rng  = np.random.default_rng(seed)
     n    = len(y_true)
+    if groups is not None:
+        _, codes = np.unique(np.asarray(groups), return_inverse=True)
+        order    = np.argsort(codes, kind="stable")
+        bounds   = np.flatnonzero(np.diff(codes[order])) + 1
+        members  = np.split(order, bounds)
     diffs = []
     for _ in range(n_boot):
-        idx  = rng.integers(0, n, size=n)
+        if groups is None:
+            idx = rng.integers(0, n, size=n)
+        else:
+            picks = rng.integers(0, len(members), size=len(members))
+            idx   = np.concatenate([members[g] for g in picks])
         yt   = y_true[idx]
         if len(np.unique(yt)) < 2:
             continue
@@ -112,18 +138,20 @@ def bootstrap_auc_diff(y_true, y_prob_base, y_prob_new, n_boot: int = 1000, seed
     lo, hi = np.percentile(diffs, [2.5, 97.5])
     p_val  = (diffs <= 0).mean()
 
-    print(f"\n{'─'*55}")
-    print(f"  Bootstrap AUC difference (new − base)  [n_boot={n_boot}]")
-    print(f"  Point estimate : {point:+.4f}")
-    print(f"  95% CI         : [{lo:+.4f},  {hi:+.4f}]")
-    if lo > 0:
-        verdict = "significant (CI excludes 0)"
-    elif hi < 0:
-        verdict = "significant NEGATIVE (CI excludes 0)"
-    else:
-        verdict = "not significant (CI includes 0)"
-    print(f"  p (diff <= 0)  : {p_val:.3f}  →  {verdict}")
-    print(f"{'─'*55}")
+    if verbose:
+        unit = "markets" if groups is not None else "rows"
+        print(f"\n{'─'*55}")
+        print(f"  Bootstrap AUC difference (new − base)  [n_boot={n_boot}, resampling {unit}]")
+        print(f"  Point estimate : {point:+.4f}")
+        print(f"  95% CI         : [{lo:+.4f},  {hi:+.4f}]")
+        if lo > 0:
+            verdict = "significant (CI excludes 0)"
+        elif hi < 0:
+            verdict = "significant NEGATIVE (CI excludes 0)"
+        else:
+            verdict = "not significant (CI includes 0)"
+        print(f"  p (diff <= 0)  : {p_val:.3f}  →  {verdict}")
+        print(f"{'─'*55}")
     return {"point": point, "ci_lo": lo, "ci_hi": hi, "p_value": p_val}
 
 

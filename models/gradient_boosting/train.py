@@ -200,7 +200,7 @@ def main():
     print(f"\nModel saved to {model_path}")
 
     PREDICTIONS_DIR.mkdir(parents=True, exist_ok=True)
-    pred_df = test[["market_id", "category", TARGET]].copy().reset_index(drop=True)
+    pred_df = test[["market_id", "snapshot_timestamp", "category", TARGET]].copy().reset_index(drop=True)
     pred_df["pred_prob_raw"] = y_prob_raw
     pred_df["pred_prob"]     = y_prob_cal
     pred_df["pred_label"]    = (y_prob_cal >= optimal_threshold).astype(int)

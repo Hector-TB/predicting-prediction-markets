@@ -8,3 +8,11 @@
 - **Section 3.3 overstates the leakage filtering.** It says snapshots after the API `closedTime` were dropped. In the code that pass never ran: the cache held zero close times (ADR-014). The paper's data was filtered by price only, with a 14-day grace period, so its test set includes post-close snapshots with carried-forward prices and about 22.5% near-settled rows.
 - **Trading simulation (5.5)** treats every snapshot as a separate trade (~52 per market), and some trades use stale post-close prices. Treat it as an upper bound, even beyond the caveats the paper lists.
 - All paper numbers need re-measuring on the ADR-013/014 dataset before being quoted again.
+
+## Reproduction check (2026-09-27)
+
+`analysis/rescore_paper.py` run on the course-era data reproduces the paper's RQ1 table, duration breakdown and trade counts/profit exactly ([`rescore_course_data.md`](rescore_course_data.md)). New findings:
+
+- **The RQ1 gains are significant.** Market-clustered bootstrap 95% CIs on ΔAUC exclude zero for every tree model (RF + Trends +0.0143 [+0.0054, +0.0231]). LR's include zero.
+- **The paper's ROI figures are overstated.** `analysis/trading_simulation.ipynb` counts capital as the market price for every trade, including NO bets, which actually cost 1 − price. With the correct cost, GB + Trends earns **12.7%** ROI per snapshot (paper: 27.5%) and **11.2%** with one trade per market. That's still above always-buy-NO (7.3% / 5.7%). The horizon sweep ("48% at day 11") uses the same formula.
+- **The lifecycle (RQ3) numbers don't match exactly** when bucketing by `pct_lifetime_elapsed` (e.g. Near RF 0.903 vs the paper's 0.937). The paper likely split each market's snapshots into thirds by count; check `analysis/analysis.ipynb`.
