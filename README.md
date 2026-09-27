@@ -75,7 +75,7 @@ predicting-prediction-markets/
 │   ├── load_parquet.py                # migrate metadata + model registry to Supabase
 │   └── migrations/                    # SQL migration files (apply via Supabase MCP)
 ├── docs/
-│   ├── decisions/                     # Architecture Decision Records (ADR-001–014)
+│   ├── decisions/                     # Architecture Decision Records (ADR-001–015)
 │   └── paper/                         # course paper (LaTeX) + notes on its results
 ├── plots/                             # generated PNGs (gitignored)
 ├── .env.example
@@ -111,13 +111,14 @@ python data/sync.py push
 ## Training Models
 
 ```bash
-python models/logistic_regression/train.py
-python models/gradient_boosting/train.py
+python models/logistic_regression/train.py      # add --trends for the Google Trends variant
+python models/gradient_boosting/train.py        # add --trends for the Google Trends variant
 python models/random_forest/train.py
 python models/random_forest_trends/train.py
 python models/svm/svm.py && python models/svm/svm_evaluate.py
 
-python scripts/print_metrics.py   # all models vs the market baseline, on the same test set
+python scripts/print_metrics.py      # all models vs the market baseline
+python analysis/rescore_paper.py     # the paper's comparisons: shared test rows, market-level CIs (ADR-015)
 ```
 
 All models train on the leakage-filtered `_clean` parquet files. Shared evaluation utilities (AUC-ROC, PR-AUC, log-loss, Brier, calibration) are in `models/common/evaluation.py`.
@@ -146,7 +147,7 @@ SVM (AUC ≈ 0.94) was scored on a different subsample (7 lifetime-percentile sn
 - **RQ1:** Tree models beat the market on every metric (best: +0.014 AUC, −0.027 log-loss). Logistic regression doesn't, which suggests the signal comes from non-linear interactions between price, lifecycle position and volatility.
 - **RQ2:** Google Trends adds small, consistent gains for tree models (+0.001–0.002 AUC), mostly in geopolitics and finance.
 - **RQ3:** The models add the most early in a market's life (+0.016–0.019 AUC over the market in the first third, shrinking to +0.003–0.006 in the last third).
-- **Trading simulation:** XGBoost + Trends showed a 27.5% ROI with no transaction costs. It counts every snapshot as a separate trade and includes trades at stale post-close prices, so treat it as an upper bound.
+- **Trading simulation:** the paper reported 27.5% ROI for XGBoost + Trends, but its notebook priced NO bets at `p` instead of `1 − p`. Corrected, it's 12.7% per snapshot and 11.2% with one trade per market, against 7.3% / 5.7% for always buying NO (ADR-015). No fees or slippage, so treat these as upper bounds.
 
 The README previously quoted a 0.964 AUC baseline. That number came from the unfiltered dataset, so it was not comparable to the models.
 
@@ -276,6 +277,7 @@ All significant decisions are documented in `docs/decisions/`. These are the aud
 | [ADR-012](docs/decisions/012-s3-duckdb-data-lake.md) | S3 + DuckDB as the data lake; parquet removed from git |
 | [ADR-013](docs/decisions/013-keyset-pagination-full-refetch.md) | Keyset pagination for market fetch; full re-fetch with recomputed split |
 | [ADR-014](docs/decisions/014-leakage-filter-closedtime-and-settled-rows.md) | Leakage filter: working `closedTime` lookup; drop snapshots priced ≥ 0.95 / ≤ 0.05 |
+| [ADR-015](docs/decisions/015-evaluation-methodology.md) | Evaluation: shared test rows, market-level bootstrap CIs, NO trades cost 1 − p |
 
 ---
 

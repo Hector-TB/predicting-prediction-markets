@@ -13,7 +13,10 @@ Sections, mirroring the paper:
   RQ1  — AUC / PR-AUC / log-loss / Brier vs the market price, with a
          market-clustered bootstrap CI on ΔAUC (snapshots within a market are
          correlated, so rows are not independent).
-  RQ3  — AUC by lifecycle third (pct_lifetime_elapsed) and by market duration.
+  RQ3  — AUC by lifecycle third and by market duration. Lifecycle thirds are
+         computed two ways: by each market's snapshot order (what the paper's
+         figure used — analysis.ipynb cell 21) and by pct_lifetime_elapsed
+         (what the paper's text describes).
   5.5  — Trading simulation, two ways:
            per-snapshot     — the paper's method: every snapshot where
                               |p_model − p_market| > τ is a separate trade.
@@ -42,14 +45,19 @@ log = logging.getLogger(__name__)
 DATA_PATH = ROOT / "data" / "polymarket_ml_dataset_clean.parquet"
 MODELS_DIR = ROOT / "models"
 
-# (label, prediction CSV, candidate probability columns — first one present wins)
+LR_DIR = MODELS_DIR / "logistic_regression/predictions"
+GB_DIR = MODELS_DIR / "gradient_boosting/predictions"
+
+# label → sources tried in order: (prediction CSV, candidate probability columns).
+# The course-era LR/GB files put base + trends in one predictions.csv; the current
+# train.py writes predictions.csv and (with --trends) predictions_trends.csv.
 MODELS = [
-    ("LR",          MODELS_DIR / "logistic_regression/predictions/predictions.csv", ["pred_prob", "pred_prob_base"]),
-    ("LR + Trends", MODELS_DIR / "logistic_regression/predictions/predictions.csv", ["pred_prob_trends"]),
-    ("GB",          MODELS_DIR / "gradient_boosting/predictions/predictions.csv",   ["pred_prob", "pred_prob_base"]),
-    ("GB + Trends", MODELS_DIR / "gradient_boosting/predictions/predictions.csv",   ["pred_prob_trends"]),
-    ("RF",          MODELS_DIR / "random_forest/predictions/test_predictions.csv",  ["proba_full_calibrated"]),
-    ("RF + Trends", MODELS_DIR / "random_forest_trends/predictions/trends_test_predictions.csv", ["proba_trends_calibrated"]),
+    ("LR",          [(LR_DIR / "predictions.csv", ["pred_prob", "pred_prob_base"])]),
+    ("LR + Trends", [(LR_DIR / "predictions_trends.csv", ["pred_prob"]), (LR_DIR / "predictions.csv", ["pred_prob_trends"])]),
+    ("GB",          [(GB_DIR / "predictions.csv", ["pred_prob", "pred_prob_base"])]),
+    ("GB + Trends", [(GB_DIR / "predictions_trends.csv", ["pred_prob"]), (GB_DIR / "predictions.csv", ["pred_prob_trends"])]),
+    ("RF",          [(MODELS_DIR / "random_forest/predictions/test_predictions.csv", ["proba_full_calibrated"])]),
+    ("RF + Trends", [(MODELS_DIR / "random_forest_trends/predictions/trends_test_predictions.csv", ["proba_trends_calibrated"])]),
 ]
 
 KEY = ["market_id", "snapshot_timestamp"]
@@ -76,18 +84,26 @@ def load_test_frame() -> tuple[pd.DataFrame, list[str]]:
 
     labels = []
     cache: dict[Path, pd.DataFrame] = {}
-    for label, path, candidates in MODELS:
-        if not path.exists():
-            log.info("  skip %-12s — %s not found", label, path.relative_to(ROOT))
-            continue
-        if path not in cache:
-            cache[path] = pd.read_csv(path)
-        preds = cache[path]
-        col = next((c for c in candidates if c in preds.columns), None)
-        if col is None or "snapshot_timestamp" not in preds.columns:
-            why = "no probability column" if col is None else "no snapshot_timestamp column (retrain)"
+    for label, sources in MODELS:
+        path = col = None
+        why = "no prediction file found"
+        for src, candidates in sources:
+            if not src.exists():
+                continue
+            if src not in cache:
+                cache[src] = pd.read_csv(src)
+            found = next((c for c in candidates if c in cache[src].columns), None)
+            if found is None:
+                why = f"no probability column in {src.name}"
+            elif "snapshot_timestamp" not in cache[src].columns:
+                why = f"{src.name} has no snapshot_timestamp column (retrain)"
+            else:
+                path, col = src, found
+                break
+        if path is None:
             log.info("  skip %-12s — %s", label, why)
             continue
+        preds = cache[path]
         p = preds[KEY + [col]].rename(columns={col: label})
         p["snapshot_timestamp"] = pd.to_datetime(p["snapshot_timestamp"], format="mixed", utc=True)
         before = len(base)
@@ -95,8 +111,13 @@ def load_test_frame() -> tuple[pd.DataFrame, list[str]]:
         log.info("  %-12s ← %s[%s]  (%s rows matched of %s)", label, path.name, col, f"{len(base):,}", f"{before:,}")
         labels.append(label)
 
+    # Position of each snapshot within its own market's test snapshots (0 = first)
+    base = base.reset_index(drop=True)
+    rank = base.groupby("market_id")["snapshot_timestamp"].rank(method="first")
+    base["rank_pct"] = (rank - 1) / base.groupby("market_id")["snapshot_timestamp"].transform("count")
+
     log.info("Common evaluation set: %s snapshots, %s markets", f"{len(base):,}", f"{base['market_id'].nunique():,}")
-    return base.reset_index(drop=True), labels
+    return base, labels
 
 
 # ─────────────────────────────────────────────
@@ -136,7 +157,7 @@ def rq1(df: pd.DataFrame, labels: list[str], n_boot: int) -> str:
 def by_bucket(df: pd.DataFrame, labels: list[str], title: str, col: str, buckets) -> str:
     rows = []
     for name, lo, hi in buckets:
-        sub = df[(df[col] >= lo) & ((df[col] < hi) if col == "pct_lifetime_elapsed" else (df[col] <= hi))]
+        sub = df[(df[col] >= lo) & ((df[col] < hi) if col in ("pct_lifetime_elapsed", "rank_pct") else (df[col] <= hi))]
         y = sub["outcome"].values
         rows.append([name, f"{len(sub):,}", auc_or_blank(y, sub[MARKET].values)]
                     + [auc_or_blank(y, sub[l].values) for l in labels])
@@ -218,7 +239,8 @@ def main():
     report = "\n\n".join([
         f"# Paper re-score — {DATA_PATH.name}",
         rq1(df, labels, args.n_boot),
-        by_bucket(df, labels, "RQ3 — lifecycle stage", "pct_lifetime_elapsed", LIFECYCLE),
+        by_bucket(df, labels, "RQ3 — lifecycle stage (thirds of each market's snapshots, as in the paper's figure)", "rank_pct", LIFECYCLE),
+        by_bucket(df, labels, "RQ3 — lifecycle stage (by pct_lifetime_elapsed)", "pct_lifetime_elapsed", LIFECYCLE),
         by_bucket(df, labels, "RQ3 — market duration", "duration_days", DURATION),
         trading(df, labels, args.n_boot),
     ]) + "\n"

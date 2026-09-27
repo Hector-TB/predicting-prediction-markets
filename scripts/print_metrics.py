@@ -19,7 +19,9 @@ SOURCES = [
     # (label,            csv path,                                                   prob col)
     ("Market baseline",  None,                                                        "price_at_snapshot"),
     ("LR",               MODELS / "logistic_regression/predictions/predictions.csv",  "pred_prob"),
+    ("LR + trends",      MODELS / "logistic_regression/predictions/predictions_trends.csv", "pred_prob"),
     ("XGBoost",          MODELS / "gradient_boosting/predictions/predictions.csv",    "pred_prob"),
+    ("XGBoost + trends", MODELS / "gradient_boosting/predictions/predictions_trends.csv", "pred_prob"),
     ("RF price-only",    MODELS / "random_forest/predictions/test_predictions.csv",   "proba_price_only"),
     ("RF full",          MODELS / "random_forest/predictions/test_predictions.csv",   "proba_full"),
     ("RF calibrated",    MODELS / "random_forest/predictions/test_predictions.csv",   "proba_full_calibrated"),

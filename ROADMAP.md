@@ -14,17 +14,23 @@ Schema in `db/migrations/001_initial_schema.sql`. All 5 tables created.
 All 5 issues fixed: incremental fetch in `fetch_markets.py` (frozen split); dynamic
 timeframe + append in `fetch_category_trends.py`; absolute paths in `build_trend_features.py`;
 parquet output in `fix_dataset.py`; dynamic `HARD_CUTOFF` + single-file input in `fix_leakage.py`.
-- TODO: end-to-end run on fresh data + push to S3 (do before step 4)
+- 2026-09-25–27: keyset pagination + full re-fetch (ADR-013, 45,143 markets); working
+  closedTime lookup + per-row settled-price filter (ADR-014); LLM categories keyed by id
+  (all markets re-categorised); pipeline streams in batches to fit 8 GB of RAM
+- IN PROGRESS: snapshot rebuild for the new markets, then `run_pipeline.py --skip-markets
+  --skip-snapshots` + `python data/sync.py push` (do before step 4)
 
 ### 3. ~~Write `train.py` for random forest~~ ✓ DONE
 `models/random_forest/train.py` and `models/random_forest_trends/train.py` written.
 Both follow the gradient_boosting pattern: combined sample weights, 5-fold CV, isotonic calibration.
 
-### 4. Retrain all models on latest data
+### 4. Retrain all models on latest data and re-score the paper
 After the pipeline refresh (step 2) is confirmed clean:
-- Run `/sync-and-train`
+- Train LR and XGBoost with and without `--trends`, RF and RF + Trends (`/sync-and-train`)
+- Run `python analysis/rescore_paper.py --out docs/paper/rescore_rebuilt_data.md` — does the
+  paper's RQ1 gain survive ADR-014? (evaluation rules: ADR-015)
 - Run `/evaluate` and compare new vs old metrics
-- Push updated predictions to S3
+- Push updated predictions to S3; refresh the DB (`python db/load_parquet.py`)
 
 ---
 

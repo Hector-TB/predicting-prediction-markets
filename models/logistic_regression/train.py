@@ -1,3 +1,4 @@
+import argparse
 import pathlib
 import sys
 
@@ -37,12 +38,16 @@ NUMERIC_FEATURES = [
     "price_change_14d", "price_range_14d", "price_trend_14d",
 ]
 CATEGORICAL_FEATURES = ["category"]
+# Google Trends features (ADR-009) — same set as random_forest_trends
+TREND_FEATURES = ["trend_value", "trend_ma4", "trend_change_4w", "trend_spike", "has_trend_data"]
 TARGET = "outcome"
 
 
-def load_data():
+def load_data(trends: bool = False):
     print("Loading dataset...")
-    df = pd.read_parquet(DATA_DIR / "polymarket_ml_dataset_clean.parquet")  # leakage-filtered (ADR-005/014)
+    # Leakage-filtered (ADR-005/014); the trends file has the same rows plus trend columns
+    name = "polymarket_ml_dataset_with_trends_clean.parquet" if trends else "polymarket_ml_dataset_clean.parquet"
+    df = pd.read_parquet(DATA_DIR / name)
     df["category"] = df["category"].fillna("other")
     df = df.dropna(subset=[TARGET])
     print(f"  Total rows: {len(df):,}  |  train: {(df['split']=='train').sum():,}  |  test: {(df['split']=='test').sum():,}")
@@ -118,7 +123,15 @@ def run_grid_search(pipeline, X_train, y_train, sample_weights):
 
 
 def main():
-    df = load_data()
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--trends", action="store_true",
+                        help="add Google Trends features; writes *_trends outputs alongside the base model")
+    args = parser.parse_args()
+    suffix = "_trends" if args.trends else ""
+    if args.trends:
+        NUMERIC_FEATURES.extend(TREND_FEATURES)
+
+    df = load_data(trends=args.trends)
     train = df[df["split"] == "train"]
     test  = df[df["split"] == "test"]
 
@@ -145,7 +158,7 @@ def main():
     print_feature_importance(pipeline)
 
     ARTIFACTS_DIR.mkdir(parents=True, exist_ok=True)
-    model_path = ARTIFACTS_DIR / "model.joblib"
+    model_path = ARTIFACTS_DIR / f"model{suffix}.joblib"
     joblib.dump({"pipeline": pipeline}, model_path)
     print(f"\nModel saved to {model_path}")
 
@@ -153,7 +166,7 @@ def main():
     pred_df = test[["market_id", "snapshot_timestamp", "category", TARGET]].copy().reset_index(drop=True)
     pred_df["pred_prob"]  = y_prob
     pred_df["pred_label"] = (y_prob >= optimal_threshold).astype(int)
-    preds_path = PREDICTIONS_DIR / "predictions.csv"
+    preds_path = PREDICTIONS_DIR / f"predictions{suffix}.csv"
     pred_df.to_csv(preds_path, index=False)
     print(f"Predictions saved to {preds_path}")
 

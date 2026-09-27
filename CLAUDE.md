@@ -1,6 +1,6 @@
 # CLAUDE.md — Predicting Prediction Markets
 
-<!-- When compacting: preserve the active data split (train=80%/test=20% temporal at market level), current ADR count (ADR-001 through ADR-012), and any files modified this session. -->
+<!-- When compacting: preserve the active data split (train=80%/test=20% temporal at market level), current ADR count (ADR-001 through ADR-015), and any files modified this session. -->
 
 This file is read by Claude Code at the start of every session. Keep it under 200 lines.
 
@@ -16,12 +16,15 @@ The course paper (research questions, methods, reported results) is `docs/paper/
 
 ---
 
-## Current state (as of 2026-09-19)
+## Current state (as of 2026-09-27)
 
-- Phase: productionization — data pipeline hardened, working toward live scoring
-- Data: parquet files on S3 (`python data/sync.py pull` to fetch); pipeline runner at `data_collection_pipeline/run_pipeline.py`
-- Models trained: logistic regression, XGBoost, SVM (±trends), random forest (train.py done, not yet retrained on latest data)
-- Database: Supabase (free tier); schema in `db/migrations/001_initial_schema.sql`; 20,948 markets + 9 model_runs loaded
+- Phase: productionization — rebuilding the dataset, then retraining and re-scoring the paper's results
+- Data: the ADR-013 full re-fetch grew the market list to 45,143 (all LLM-categorised); `build_snapshots.py` is rebuilding snapshots for the ~20k new markets. After it: `run_pipeline.py --skip-markets --skip-snapshots`, then `python data/sync.py push`. The parquet files on S3 are still the course-era dataset (20,948 markets)
+- Pipeline steps stream in batches (`data_collection_pipeline/stream_parquet.py`), so they fit in 8 GB of RAM
+- Models: LR, XGBoost (`--trends` for the Trends variant), RF, RF + Trends, SVM — all still trained on course-era data; retrain after the rebuild, then `python analysis/rescore_paper.py`
+- Course paper results: RQ1 gains reproduce and are significant with market-level CIs; the paper's trading ROI is overstated (ADR-015, `docs/paper/README.md`)
+- Database: Supabase (free tier); schema in `db/migrations/001_initial_schema.sql`; 20,948 markets + 9 model_runs loaded (not yet refreshed)
+- Work in progress is on branch `pipeline-leakage-and-categories`
 - No API, no frontend yet
 
 ---
@@ -37,6 +40,8 @@ The course paper (research questions, methods, reported results) is `docs/paper/
 **Train/test split:** market-level temporal — oldest 80% train, newest 20% test. Never mix snapshots from the same market across splits. See ADR-001.
 
 **Shared evaluation code:** import `evaluate`, `check_calibration`, `find_optimal_threshold` from `models.common.evaluation` — never redefine them.
+
+**Model comparisons (ADR-015):** score every model and the market baseline on the same test rows; get CIs by resampling markets (`bootstrap_auc_diff(..., groups=market_id)`); in trading simulations a NO trade costs `1 − p`.
 
 **No bare `print()` in new code** — use Python's `logging` module.
 
@@ -87,3 +92,4 @@ The course paper (research questions, methods, reported results) is `docs/paper/
 - ADR-012: S3 + DuckDB data lake
 - ADR-013: keyset pagination for market fetch + full re-fetch (split recomputed)
 - ADR-014: leakage filter — working closedTime lookup + per-row settled-price rule
+- ADR-015: evaluation methodology — shared test rows, market-level bootstrap CIs, NO bets cost 1−p

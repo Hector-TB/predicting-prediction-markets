@@ -8,6 +8,11 @@ Run these steps in order:
 
 ## 1. Pull data from S3
 
+> **Skip this step if the local data is newer than S3** (e.g. right after a local pipeline
+> rebuild that hasn't been pushed yet). `pull` downloads every file whose size differs from
+> S3, so it would overwrite newer local files with the older S3 copies. Check with
+> `python3 data/sync.py pull --dry-run` first when unsure.
+
 ```bash
 python3 data/sync.py pull
 ```
@@ -35,7 +40,9 @@ If it fails, stop and diagnose before training.
 
 ```bash
 python3 models/logistic_regression/train.py
+python3 models/logistic_regression/train.py --trends
 python3 models/gradient_boosting/train.py
+python3 models/gradient_boosting/train.py --trends
 python3 models/random_forest/train.py
 python3 models/random_forest_trends/train.py
 python3 models/svm/svm.py && python3 models/svm/svm_evaluate.py
@@ -43,7 +50,12 @@ python3 models/svm/svm.py && python3 models/svm/svm_evaluate.py
 
 ## 5. Review results
 
-Run `/evaluate` to see the updated metrics table.
+Run `/evaluate` to see the updated metrics table, then re-score the paper's comparisons
+(same test rows, market-level CIs, corrected trading ROI — ADR-015):
+
+```bash
+python3 analysis/rescore_paper.py --out docs/paper/rescore_rebuilt_data.md
+```
 
 ## 6. Push updated predictions to S3
 
