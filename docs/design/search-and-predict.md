@@ -8,17 +8,30 @@ A public portfolio site where anyone can look up an open Polymarket market and s
 
 ## Screens (first version)
 
-1. **Search / predict** — the main page.
-   - One input that accepts a market URL, market slug, event URL, condition ID (`0x…`) or free-text name.
+1. **Search** — home page with one input that accepts a market URL, market slug, event URL, condition ID (`0x…`) or free-text name.
    - An event with several markets (e.g. 33 candidates for Ethiopian PM) shows a picker.
-   - Result:
+   - Choosing a market runs a prediction and opens its market page.
+2. **Market detail** — `/markets/<market_id>`, a permanent, shareable page per market.
+   - **Latest prediction** at the top:
      - the market price and each model's probability and gap (model − market);
-     - one headline model (the best on the latest dataset version, per `rescore_paper.py`), with the other five listed below;
-     - a price-history chart with the models' "now" point;
-     - any warnings;
-     - links to Polymarket and to each model's track record.
-2. **Model track record** — backtest results on the latest dataset version (ADR-015 method), and the **live** results from stored lookups once enough markets have resolved.
-3. **Research** — the project story: research questions, method, results.
+     - one headline model (the best on the latest dataset version, per `rescore_paper.py`), with the other five below;
+     - any warnings.
+   - **Chart:** price history, with every stored prediction overlaid as points per model.
+   - **History:** every lookup of this market (timestamp, price, each model's probability, warnings), with a "predict again" button.
+   - **Status:** open, or resolved with the outcome, and how each model's first prediction compared with the market price at that time.
+   - Links to Polymarket and to each model's page.
+3. **Recent predictions feed** — the live track record, browsable.
+   - Markets people have looked up, newest first; filters: open / resolved, category, warned or not.
+   - **Open markets:** the headline model vs the market price at the first lookup, and the price now.
+   - **Resolved markets:** the outcome, and whether the model or the market was closer. "Closer" means a lower squared error (Brier) on that market, which is fairer than calling a probability "right" or "wrong".
+   - Aggregate strip at the top: markets looked up, resolved, and how often the headline model was closer than the market (with a CI once there are enough).
+4. **Model pages** — `/models/<name>`, one per model (LR, XGBoost, RF, each ± Trends).
+   - Plain-language description of how it works and what it uses.
+   - Feature importance.
+   - Calibration curve.
+   - **Backtest** metrics on the latest dataset version vs the market (ADR-015), and **live** metrics over resolved lookups, side by side.
+5. **Model track record** — the comparison across models: backtest table + live table (also summarised on each model page).
+6. **Research** — the project story: research questions, method, results.
 
 (The earlier "live market list" of all ~6,700 scoreable open markets was dropped: a search box is simpler to build and run, and just as useful for a portfolio piece.)
 
@@ -76,9 +89,30 @@ GET /predict?market_id=<condition id>
     }
   400 { "error": "not_binary" | "closed" | "not_found" }
 
+GET /markets/{market_id}
+  → { "market": {…, "resolution_status", "outcome", "closed_time"},
+      "lookups": [ { "as_of", "price", "warnings", "predictions": [ { "model", "probability" }, … ] }, … ],
+      "price_history": [ … ] }
+
+GET /lookups?status=open|resolved&category=&warned=&cursor=
+  → { "items": [ { "market_id", "question", "category", "first_lookup_at", "price_at_lookup",
+                   "headline_probability", "price_now" | null, "outcome" | null,
+                   "closer": "model" | "market" | null }, … ],
+      "summary": { "looked_up", "resolved", "model_closer_rate", "ci" },
+      "next_cursor": … }
+
+GET /models                 → list with one-line descriptions and headline metrics
+GET /models/{name}
+  → { "description", "features": [ { "name", "importance" }, … ],
+      "calibration": [ { "predicted", "actual", "n" }, … ],
+      "backtest": { "dataset_version", "auc", "log_loss", "brier", "delta_auc_vs_market": [lo, hi] },
+      "live": { "n_resolved", "auc", "log_loss", "brier", … } | null }
+
 GET /track-record
   → backtest metrics per model (from model_runs) + live metrics over resolved lookups
 ```
+
+Model pages need two things stored at training time that aren't today: **feature importance** and **calibration bins** per model. Add them to `model_runs` (e.g. in `metrics` / `hyperparams` JSONB) when `db/load_parquet.py` registers a run.
 
 ## Storage — live track record (new migration)
 

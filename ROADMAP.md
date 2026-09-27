@@ -54,8 +54,9 @@ After the pipeline refresh (step 2) is confirmed clean:
 ## Later — frontend
 
 ### 7. React frontend (public portfolio site)
-Search / predict page (all six models + gap, headline model first), model track record
-(backtest + live), research page. Blocked on: API.
+Search → market detail page (all six models + gap, prediction history, outcome), recent
+predictions feed (live track record), model pages (importance, calibration, backtest vs live),
+track-record comparison, research page. Blocked on: API.
 
 ---
 
