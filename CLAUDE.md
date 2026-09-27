@@ -1,6 +1,6 @@
 # CLAUDE.md — Predicting Prediction Markets
 
-<!-- When compacting: preserve the active data split (train=80%/test=20% temporal at market level), current ADR count (ADR-001 through ADR-015), and any files modified this session. -->
+<!-- When compacting: preserve the active data split (train=80%/test=20% temporal at market level), current ADR count (ADR-001 through ADR-016), and any files modified this session. -->
 
 This file is read by Claude Code at the start of every session. Keep it under 200 lines.
 
@@ -21,7 +21,7 @@ The course paper (research questions, methods, reported results) is `docs/paper/
 Dataset versions: **v1** = the course-project dataset the paper used (20,948 markets, still on S3); **v2** = the ADR-013/014 rebuild (45,143 markets fetched, in progress).
 
 - Phase: productionization — rebuilding the dataset, then retraining and re-scoring the paper's results
-- Data: the ADR-013 full re-fetch grew the market list to 45,143 (all LLM-categorised); `build_snapshots.py` is rebuilding snapshots for the ~20k new markets. After it: `run_pipeline.py --skip-markets --skip-snapshots`, then `python data/sync.py push`. The parquet files on S3 are still the v1 dataset (20,948 markets)
+- Data: the ADR-013 full re-fetch grew the market list to 45,143 (all LLM-categorised); `build_snapshots.py` is rebuilding snapshots for the ~20k new markets. After it: `run_pipeline.py --skip-markets --skip-snapshots`, then `python data/sync.py publish v2 --parent v1 --notes "…"`. S3 holds v1 (immutable, `datasets/v1/`); datasets are versioned per ADR-016 — never overwrite, publish a new version
 - Pipeline steps stream in batches (`data_collection_pipeline/stream_parquet.py`), so they fit in 8 GB of RAM
 - Models: LR, XGBoost (`--trends` for the Trends variant), RF, RF + Trends, SVM — all still trained on the v1 dataset; retrain after the rebuild, then `python analysis/rescore_paper.py`
 - Course paper results: RQ1 gains reproduce and are significant with market-level CIs; the paper's trading ROI is overstated (ADR-015, `docs/paper/README.md`)
@@ -52,6 +52,7 @@ Dataset versions: **v1** = the course-project dataset the paper used (20,948 mar
 ## What NOT to do
 
 - Do not modify `data/*.parquet` directly — they live on S3, manage with `data/sync.py`
+- Never overwrite or delete a published dataset version on S3 — publish a new one (ADR-016)
 - Do not add model-specific evaluation functions — put them in `models/common/evaluation.py`
 - Do not amend commits that have been pushed
 - Do not change the train/test split logic without a new ADR
@@ -95,3 +96,4 @@ Dataset versions: **v1** = the course-project dataset the paper used (20,948 mar
 - ADR-013: keyset pagination for market fetch + full re-fetch (split recomputed)
 - ADR-014: leakage filter — working closedTime lookup + per-row settled-price rule
 - ADR-015: evaluation methodology — shared test rows, market-level bootstrap CIs, NO bets cost 1−p
+- ADR-016: immutable dataset versions on S3 (`datasets/vN/` + manifest); `sync.py publish/pull`

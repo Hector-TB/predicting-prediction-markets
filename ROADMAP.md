@@ -18,7 +18,7 @@ parquet output in `fix_dataset.py`; dynamic `HARD_CUTOFF` + single-file input in
   closedTime lookup + per-row settled-price filter (ADR-014); LLM categories keyed by id
   (all markets re-categorised); pipeline streams in batches to fit 8 GB of RAM
 - IN PROGRESS: snapshot rebuild for the new markets, then `run_pipeline.py --skip-markets
-  --skip-snapshots` + `python data/sync.py push` (do before step 4)
+  --skip-snapshots` + `python data/sync.py publish v2 --parent v1` (do before step 4)
 
 ### 3. ~~Write `train.py` for random forest~~ ✓ DONE
 `models/random_forest/train.py` and `models/random_forest_trends/train.py` written.

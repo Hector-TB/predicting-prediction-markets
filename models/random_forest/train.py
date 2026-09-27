@@ -36,6 +36,7 @@ PREDICTIONS_DIR = Path(__file__).parent / "predictions"
 
 sys.path.insert(0, str(ROOT))
 from models.common.evaluation import (  # noqa: E402
+    dataset_version,
     analyze_market_disagreements,
     check_calibration,
     evaluate,
@@ -245,6 +246,7 @@ def main():
         log.warning("  SHAP skipped: %s", e)
 
     pred_df = test[["market_id", "snapshot_timestamp", TARGET, "split"]].copy()
+    pred_df["dataset_version"]       = dataset_version()
     pred_df["proba_price_only"]      = proba_price.round(6)
     pred_df["proba_full"]            = proba_full.round(6)
     pred_df["proba_full_calibrated"] = proba_cal.round(6)

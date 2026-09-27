@@ -1,0 +1,104 @@
+{
+  "version": "v1",
+  "created_at": "2026-09-27T21:28:54+00:00",
+  "parent": null,
+  "notes": "Course-project dataset as uploaded to the flat data/ prefix on 2026-09-19. Clean files: 21,316 markets / 1,510,332 snapshots \u2014 a superset of the paper's 20,948 / 1,448,142 (368 markets added by the 2026-09-19 incremental fetch); the paper's exact rows = these test rows joined to the git-tracked v1 prediction CSVs (288,490). polymarket_markets_meta.csv here is a stray 210-market test file, not this dataset's metadata. Leakage filter: price threshold + 14-day grace; closedTime pass never ran (ADR-014). Categories partly misaligned (see categorize_markets fix, 2026-09-27).",
+  "fetched_on": "2026-09-19",
+  "code": {
+    "git_commit": null,
+    "adrs": [
+      "001",
+      "002",
+      "003",
+      "004",
+      "005",
+      "006",
+      "007",
+      "008",
+      "009",
+      "010",
+      "011",
+      "012"
+    ],
+    "provenance": "adopted from the pre-ADR-016 s3://polymarket-ml-htb/data/ prefix"
+  },
+  "contents": {
+    "markets_fetched": 210,
+    "market_start_date_min": "2022-01-11",
+    "market_start_date_max": "2024-02-15",
+    "markets_fetched_by_split": {
+      "train": 168,
+      "test": 42
+    },
+    "test_split_starts": "2024-01-12",
+    "clean_snapshots": 1510332,
+    "clean_markets": 21316,
+    "clean_snapshots_by_split": {
+      "train": 1210756,
+      "test": 299576
+    },
+    "clean_markets_by_split": {
+      "train": 17073,
+      "test": 4243
+    },
+    "clean_snapshot_yes_rate": 0.2296,
+    "snapshot_timestamp_min": "2022-11-30 02:08:51.147000+00:00",
+    "snapshot_timestamp_max": "2026-09-19 22:39:02.711214+00:00"
+  },
+  "files": {
+    "category_trends_features.parquet": {
+      "bytes": 15519,
+      "sha256": "ce49be88ba9252f0722a1e374890a8350b71a1b0b91de421fed2ec4b6c2749e2",
+      "rows": 1737,
+      "uploaded_to_legacy_prefix": "2026-09-19T20:46:40+00:00"
+    },
+    "polymarket_markets_meta.csv": {
+      "bytes": 59593,
+      "sha256": "1422ba01e9ee9e27322b76da5004eabe5310a0acf31d8f2cab35adf8e1dd5f5b",
+      "rows": null,
+      "uploaded_to_legacy_prefix": "2026-09-19T20:46:40+00:00"
+    },
+    "polymarket_ml_dataset.parquet": {
+      "bytes": 92662412,
+      "sha256": "e996f80f191aa8f168d50cd15c7842964a7b81b1fa27a40d32c5f93075514829",
+      "rows": 4078109,
+      "uploaded_to_legacy_prefix": "2026-09-19T19:33:42+00:00"
+    },
+    "polymarket_ml_dataset_clean.parquet": {
+      "bytes": 49665197,
+      "sha256": "080a2eab8b3643b27af332f315a5b93769bdc2e97daaa4165cabd5c46eb1df0f",
+      "rows": 1510332,
+      "uploaded_to_legacy_prefix": "2026-09-19T20:46:18+00:00"
+    },
+    "polymarket_ml_dataset_with_trends_clean.parquet": {
+      "bytes": 58933093,
+      "sha256": "f5881f256162cc97e944debdb8197c675e9c2f01e95a03e78ad313cbc9b81874",
+      "rows": 1510332,
+      "uploaded_to_legacy_prefix": "2026-09-19T20:46:28+00:00"
+    },
+    "polymarket_ml_dataset_with_trends_part1.parquet": {
+      "bytes": 64577027,
+      "sha256": "671d4dca7710b50a3fa7836bb3d8b86a5594431a733b209e2e0ff8787fc4dbed",
+      "rows": 2039054,
+      "uploaded_to_legacy_prefix": "2026-09-19T19:34:00+00:00"
+    },
+    "polymarket_ml_dataset_with_trends_part1_clean.parquet": {
+      "bytes": 30515823,
+      "sha256": "14959886aa9a95bd4d0083e28a41869ce269e4ed317019830da3fcc906b3ea5b",
+      "rows": 765717,
+      "uploaded_to_legacy_prefix": "2026-09-19T19:34:27+00:00"
+    },
+    "polymarket_ml_dataset_with_trends_part2.parquet": {
+      "bytes": 66955774,
+      "sha256": "15249b5168432ef1c2b878a76bccd26901cc64a712365772127c3e5326d3321f",
+      "rows": 2039055,
+      "uploaded_to_legacy_prefix": "2026-09-19T19:34:14+00:00"
+    },
+    "polymarket_ml_dataset_with_trends_part2_clean.parquet": {
+      "bytes": 26649353,
+      "sha256": "84a55bd26d474d44a483d47871643446599b364e888fba45757caf9fa970316c",
+      "rows": 685622,
+      "uploaded_to_legacy_prefix": "2026-09-19T19:34:33+00:00"
+    }
+  }
+}

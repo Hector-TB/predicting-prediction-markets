@@ -1,8 +1,10 @@
 # Data files — live on S3, not in git (see ADR-012)
-# Sync with: python data/sync.py pull / push
+# Versioned on S3 with data/sync.py (ADR-016): list / status / pull / publish
 data/*.parquet
 data/*.csv
 data/fetch_cache/
+data/manifest.json     # which dataset version is checked out locally
+data/*.bak.csv
 
 # Notebooks
 testing.ipynb

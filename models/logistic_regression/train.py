@@ -18,6 +18,7 @@ DATA_DIR = ROOT / "data"
 sys.path.insert(0, str(ROOT))
 
 from models.common.evaluation import (  # noqa: E402
+    dataset_version,
     evaluate,
     evaluate_by_category,
     find_optimal_threshold,
@@ -165,6 +166,7 @@ def main():
     PREDICTIONS_DIR.mkdir(parents=True, exist_ok=True)
     pred_df = test[["market_id", "snapshot_timestamp", "category", TARGET]].copy().reset_index(drop=True)
     pred_df["pred_prob"]  = y_prob
+    pred_df["dataset_version"] = dataset_version()
     pred_df["pred_label"] = (y_prob >= optimal_threshold).astype(int)
     preds_path = PREDICTIONS_DIR / f"predictions{suffix}.csv"
     pred_df.to_csv(preds_path, index=False)

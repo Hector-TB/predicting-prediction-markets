@@ -8,10 +8,9 @@ Run these steps in order:
 
 ## 1. Pull data from S3
 
-> **Skip this step if the local data is newer than S3** (e.g. right after a local pipeline
-> rebuild that hasn't been pushed yet). `pull` downloads every file whose size differs from
-> S3, so it would overwrite newer local files with the older S3 copies. Check with
-> `python3 data/sync.py pull --dry-run` first when unsure.
+> **Skip this step right after a local pipeline rebuild** — publish it first (step 2).
+> `pull` refuses to overwrite local files that differ from the S3 version unless `--force`
+> is given. Check what's local with `python3 data/sync.py status`.
 
 ```bash
 python3 data/sync.py pull
@@ -23,10 +22,10 @@ If any files show "size mismatch", investigate before proceeding.
 
 ```bash
 python3 data_collection_pipeline/run_pipeline.py
-python3 data/sync.py push
+python3 data/sync.py publish <next version> --parent <current> --notes "…"
 ```
 
-This fetches new resolved markets, extends Google Trends to today, and regenerates clean parquets.
+Versions are immutable (ADR-016); `python3 data/sync.py list` shows what exists. This fetches new resolved markets, extends Google Trends to today, and regenerates clean parquets.
 
 ## 3. Smoke test — verify data is healthy
 
@@ -57,11 +56,10 @@ Run `/evaluate` to see the updated metrics table, then re-score the paper's comp
 python3 analysis/rescore_paper.py --out docs/paper/rescore_v2_data.md
 ```
 
-## 6. Push updated predictions to S3
+## 6. Record results
 
-```bash
-python3 data/sync.py push
-```
+Prediction CSVs are tracked in git — commit them. Model runs in the DB are tagged with the
+dataset version (`clean_<version>`), so re-run `python3 db/load_parquet.py` after training.
 
 ## Notes
 

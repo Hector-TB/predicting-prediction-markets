@@ -101,7 +101,7 @@ def main():
     log.info("\n%s", "=" * 60)
     if steps_ok:
         log.info("  PIPELINE COMPLETE")
-        log.info("  Next: python data/sync.py push")
+        log.info("  Next: python data/sync.py publish <next version> --parent <current> --notes \"…\"  (ADR-016)")
     else:
         log.info("  PIPELINE COMPLETE WITH ERRORS — check output above")
     log.info("%s\n", "=" * 60)

@@ -25,6 +25,21 @@ from sklearn.metrics import (
 TARGET = "outcome"
 
 
+def dataset_version() -> str:
+    """
+    Version of the local dataset (ADR-016), from data/manifest.json. Stamped on
+    prediction CSVs so every result says which data it was trained on.
+    Returns "unversioned" (with a warning) for data that was never published or pulled.
+    """
+    import json
+    from pathlib import Path
+    manifest = Path(__file__).resolve().parents[2] / "data" / "manifest.json"
+    if not manifest.exists():
+        print("  WARNING: local data has no manifest — publish or pull a version first (ADR-016)")
+        return "unversioned"
+    return json.loads(manifest.read_text())["version"]
+
+
 def find_optimal_threshold(y_true, y_prob):
     """Return (threshold, f1) that maximises F1 on the precision-recall curve."""
     precision, recall, thresholds = precision_recall_curve(y_true, y_prob)

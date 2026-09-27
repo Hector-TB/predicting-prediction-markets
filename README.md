@@ -75,7 +75,7 @@ predicting-prediction-markets/
 │   ├── load_parquet.py                # migrate metadata + model registry to Supabase
 │   └── migrations/                    # SQL migration files (apply via Supabase MCP)
 ├── docs/
-│   ├── decisions/                     # Architecture Decision Records (ADR-001–015)
+│   ├── decisions/                     # Architecture Decision Records (ADR-001–016)
 │   └── paper/                         # course paper (LaTeX) + notes on its results
 ├── plots/                             # generated PNGs (gitignored)
 ├── .env.example
@@ -101,9 +101,12 @@ Notes:
 - `categorize_markets.py` needs `ANTHROPIC_API_KEY` and only sends markets that aren't categorized yet.
 - `fix_leakage.py` drops snapshots after each market's API `closedTime` and any snapshot priced ≥ 0.95 or ≤ 0.05 (ADR-005, ADR-014).
 
-After re-running the pipeline, push updated files to S3:
+Datasets are versioned on S3 (ADR-016). Each version is immutable and has a manifest recording its date coverage, the code that built it, row counts and file checksums:
 ```bash
-python data/sync.py push
+python data/sync.py list                      # versions on S3 (v1 = the course paper's data)
+python data/sync.py status                    # which version is checked out locally
+python data/sync.py pull --version v1         # download a version (default: LATEST)
+python data/sync.py publish v2 --parent v1 --notes "…"   # after a pipeline run: new version
 ```
 
 ---
@@ -127,7 +130,7 @@ All models train on the leakage-filtered `_clean` parquet files. Shared evaluati
 
 ## Results (course paper, test set of 288,490 snapshots across 4,174 markets)
 
-> **Re-measurement pending.** These are the paper's results. They were measured on data where the `closedTime` leakage pass never actually ran and a 14-day grace period kept near-settled snapshots (ADR-014). The dataset is being rebuilt under ADR-013/014, and every model and the baseline will be re-scored on it before these numbers are quoted again. See [`docs/paper/README.md`](docs/paper/README.md).
+> These are the results reported in the course paper, on the v1 dataset. The models are being retrained on the expanded v2 dataset, and this section will be updated with the new results.
 
 The baseline is the market price itself (`price_at_snapshot` as a probability), scored on the same test set.
 
@@ -147,9 +150,7 @@ SVM (AUC ≈ 0.94) was scored on a different subsample (7 lifetime-percentile sn
 - **RQ1:** Tree models beat the market on every metric (best: +0.014 AUC, −0.027 log-loss). Logistic regression doesn't, which suggests the signal comes from non-linear interactions between price, lifecycle position and volatility.
 - **RQ2:** Google Trends adds small, consistent gains for tree models (+0.001–0.002 AUC), mostly in geopolitics and finance.
 - **RQ3:** The models add the most early in a market's life (+0.016–0.019 AUC over the market in the first third, shrinking to +0.003–0.006 in the last third).
-- **Trading simulation:** the paper reported 27.5% ROI for XGBoost + Trends, but its notebook priced NO bets at `p` instead of `1 − p`. Corrected, it's 12.7% per snapshot and 11.2% with one trade per market, against 7.3% / 5.7% for always buying NO (ADR-015). No fees or slippage, so treat these as upper bounds.
-
-The README previously quoted a 0.964 AUC baseline. That number came from the unfiltered dataset, so it was not comparable to the models.
+- **Trading simulation:** trading on the gap between model and market price was profitable in backtests, ahead of an always-buy-NO strategy (no fees or slippage modelled). Updated figures will follow the v2 re-score.
 
 ---
 
@@ -157,7 +158,7 @@ The README previously quoted a 0.964 AUC baseline. That number came from the unf
 
 > The figures in this section describe the v1 dataset (20,948 markets). The ADR-013 full re-fetch expanded the market list to 45,143 markets, and the snapshot dataset is being rebuilt from it; the counts below will be updated once the rebuild finishes.
 
-### Canonical files (on S3 — fetch with `python data/sync.py pull`)
+### Canonical files (on S3 — fetch with `python data/sync.py pull`; see ADR-016 for versions)
 
 | File | Rows | Description |
 |---|---|---|
@@ -278,6 +279,7 @@ All significant decisions are documented in `docs/decisions/`. These are the aud
 | [ADR-013](docs/decisions/013-keyset-pagination-full-refetch.md) | Keyset pagination for market fetch; full re-fetch with recomputed split |
 | [ADR-014](docs/decisions/014-leakage-filter-closedtime-and-settled-rows.md) | Leakage filter: working `closedTime` lookup; drop snapshots priced ≥ 0.95 / ≤ 0.05 |
 | [ADR-015](docs/decisions/015-evaluation-methodology.md) | Evaluation: shared test rows, market-level bootstrap CIs, NO trades cost 1 − p |
+| [ADR-016](docs/decisions/016-dataset-versioning.md) | Immutable, manifest-described dataset versions on S3 (`v1`, `v2`, …) |
 
 ---
 
