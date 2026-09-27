@@ -44,7 +44,7 @@ TARGET = "outcome"
 
 def load_data():
     print("Loading dataset...")
-    df = pd.read_parquet(DATA_DIR / "polymarket_ml_dataset.parquet")
+    df = pd.read_parquet(DATA_DIR / "polymarket_ml_dataset_clean.parquet")  # leakage-filtered (ADR-005/014)
     df["category"] = df["category"].fillna("other")
     df = df.dropna(subset=[TARGET])
     print(f"  Total rows: {len(df):,}  |  train: {(df['split']=='train').sum():,}  |  test: {(df['split']=='test').sum():,}")

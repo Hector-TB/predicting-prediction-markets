@@ -28,7 +28,7 @@ All models apply cost-sensitive learning to handle imbalance:
 
 **Why not report accuracy:** A model that always predicts NO hits 78% accuracy. Reporting accuracy as a primary metric would mislead.
 
-**Why AUC-ROC:** Threshold-independent, intuitive (probability that model ranks a YES higher than a NO), and the standard metric for the baseline comparison (market price AUC = 0.964).
+**Why AUC-ROC:** Threshold-independent, intuitive (probability that model ranks a YES higher than a NO), and the standard metric for the baseline comparison (market price AUC was quoted as 0.964; it doesn't reproduce on the clean data and must be recomputed — see ADR-014).
 
 ## Alternatives considered
 

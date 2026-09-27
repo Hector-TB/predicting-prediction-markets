@@ -127,6 +127,8 @@ Shared evaluation utilities (AUC-ROC, PR-AUC, log-loss, Brier, calibration) are 
 
 ## Results (test set, 288,490 snapshots across 4,174 markets)
 
+> **Outdated (2026-09-27).** These are the course-era results. The 0.964 / 0.171 baseline does not reproduce on the clean parquet these models were scored on: `scripts/print_metrics.py` gives the market price AUC 0.8905 / log-loss 0.330 there, below RF's 0.902 AUC, so the "no model beats the baseline" finding below is unverified. The dataset is being rebuilt under ADR-013/014, and every model and the baseline must be re-scored on it before drawing conclusions.
+
 **Baseline — market price alone:** AUC-ROC = **0.964**, log-loss = **0.171**
 
 The market price is a near-perfect predictor. Beating it is the bar for RQ1.

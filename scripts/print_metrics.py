@@ -18,10 +18,8 @@ MODELS = ROOT / "models"
 SOURCES = [
     # (label,            csv path,                                                   prob col)
     ("Market baseline",  None,                                                        "price_at_snapshot"),
-    ("LR base",          MODELS / "logistic_regression/predictions/predictions.csv",  "pred_prob_base"),
-    ("LR + trends",      MODELS / "logistic_regression/predictions/predictions.csv",  "pred_prob_trends"),
-    ("XGBoost base",     MODELS / "gradient_boosting/predictions/predictions.csv",    "pred_prob_base"),
-    ("XGBoost + trends", MODELS / "gradient_boosting/predictions/predictions.csv",    "pred_prob_trends"),
+    ("LR",               MODELS / "logistic_regression/predictions/predictions.csv",  "pred_prob"),
+    ("XGBoost",          MODELS / "gradient_boosting/predictions/predictions.csv",    "pred_prob"),
     ("RF price-only",    MODELS / "random_forest/predictions/test_predictions.csv",   "proba_price_only"),
     ("RF full",          MODELS / "random_forest/predictions/test_predictions.csv",   "proba_full"),
     ("RF calibrated",    MODELS / "random_forest/predictions/test_predictions.csv",   "proba_full_calibrated"),
@@ -62,7 +60,7 @@ def main():
                 m = baseline
                 print(f"  {'Market baseline':<22} {m['auc']:>8.4f} {m['ll']:>10.4f} {m['pr']:>8.4f} {m['n']:>10,}  ← beat this")
             else:
-                print(f"  {'Market baseline':<22} {'0.9640':>8} {'0.1710':>10} {'':>8} {'':>10}  ← beat this")
+                print(f"  {'Market baseline':<22}  ({BASELINE_PATH.name} not found — run the pipeline)")
             print("  " + "─" * 64)
             continue
 

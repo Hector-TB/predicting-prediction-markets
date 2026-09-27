@@ -9,7 +9,7 @@ ARTIFACTS_DIR = SCRIPT_DIR / "artifacts"
 RANDOM_STATE  = 42
 
 # ── LOAD SUBSAMPLED DATA ─────────────────────────────────────────────────────────
-df_sampled = pd.read_parquet(ARTIFACTS_DIR / "df_sampled.parquet")
+df_sampled = pd.read_parquet(ARTIFACTS_DIR / "df_sampled_clean.parquet")
 df_sampled['category'] = df_sampled['category'].fillna('unknown')
 df_sampled['outcome']  = df_sampled['outcome'].astype(int)
 

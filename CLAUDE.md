@@ -29,7 +29,7 @@ Originally NYU DS-GA 1003 (team of 3). Now being productionized into a full-stac
 
 **Path resolution:** `ROOT = Path(__file__).resolve().parent` (or `.parent.parent` as needed) — never hardcode relative paths.
 
-**Metrics:** primary = AUC-ROC and log-loss. Market price baseline = AUC 0.964 / log-loss 0.171. Do not report raw accuracy (78% NO class imbalance makes it misleading).
+**Metrics:** primary = AUC-ROC and log-loss. Market price baseline = `price_at_snapshot` scored on the same test set — get current numbers from `python scripts/print_metrics.py`, never a hard-coded value (the old 0.964 / 0.171 did not match the clean data; ADR-014 changes it again). Do not report raw accuracy (78% NO class imbalance makes it misleading).
 
 **Class imbalance:** always `class_weight='balanced'` (sklearn) or `scale_pos_weight` (XGBoost). No exceptions.
 

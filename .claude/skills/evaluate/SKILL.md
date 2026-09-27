@@ -10,6 +10,6 @@ disable-model-invocation: true
 
 ## Notes
 
-- Baseline AUC-ROC = 0.964, log-loss = 0.171 (market price as predictor)
-- No model currently beats the baseline — see ADR-011 and the Results section in README
+- The baseline (market price as predictor) is computed live from `polymarket_ml_dataset_clean.parquet` — don't quote a fixed number
+- Pre-ADR-014 results are not comparable with post-ADR-014 ones (see ADR-014 Consequences)
 - To add a new model's predictions, add a row to `scripts/print_metrics.py` SOURCES list
