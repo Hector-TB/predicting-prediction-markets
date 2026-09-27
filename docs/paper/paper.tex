@@ -1,0 +1,718 @@
+\documentclass[11pt,twocolumn]{article}
+
+% --- Page & font setup ---
+\usepackage[margin=0.5in]{geometry}
+\usepackage{lmodern}
+\usepackage{graphicx}
+\usepackage{float}
+\usepackage{subcaption}
+\usepackage{booktabs}
+\setlength{\columnsep}{0.25in}
+\usepackage[font=scriptsize]{caption}
+
+
+% --- Math packages ---
+\usepackage{amsmath, amssymb, amsthm}
+\usepackage{titlesec}
+
+\titlespacing*{\section}{0pt}{0.6em}{0.4em}
+\titlespacing*{\subsection}{0pt}{0.4em}{0.2em}
+\titleformat{\section}{\large\bfseries}{}{0pt}{}
+\titleformat{\subsection}{\normalsize\bfseries}{}{0pt}{}
+\raggedbottom
+\setlength{\parskip}{0pt}
+\setlength{\parindent}{12pt}
+\setlength{\floatsep}{4pt}
+\setlength{\textfloatsep}{6pt}
+\setlength{\intextsep}{4pt}
+
+% --- Code listings ---
+\usepackage{listings}
+\usepackage{xcolor}
+\lstset{
+    language=Python,
+    basicstyle=\ttfamily\small,
+    keywordstyle=\color{blue}\bfseries,
+    commentstyle=\color{green!50!black}\itshape,
+    stringstyle=\color{red!70!black},
+    frame=single,
+    rulecolor=\color{black!30},
+    numbers=left,
+    numberstyle=\tiny,
+    stepnumber=1,
+    numbersep=5pt,
+    showstringspaces=false,
+    breaklines=true,
+    tabsize=4,
+}
+
+% --- Enumeration style ---
+\usepackage{enumitem}
+\setlist[enumerate,1]{label=\textbf{(\alph*)}}
+
+\usepackage[colorlinks=true, linkcolor=blue, citecolor=blue, urlcolor=blue]{hyperref}
+% ============================================================
+% DOCUMENT
+% ============================================================
+\begin{document}
+\pagenumbering{arabic}
+
+% Full-width title + abstract
+\twocolumn[{%
+\begin{center}
+    {\Large\bfseries Predicting the Future: Applying Machine Learning to Prediction Markets}\\[0.5em]
+    {\bfseries Hector Thompson Baroni, Dhairya Dhamani, Sachin Sastri}\\[0.3em]
+    {\small New York University $\cdot$ Center for Data Science}
+\end{center}
+}]
+
+% ============================================================
+\section*{1. Introduction}
+% ============================================================
+
+Prediction markets are platforms where people buy and sell contracts tied to the outcomes of real-world events. A contract pays \$1 if an event occurs and \$0 if it does not, so its price at any point in time reflects the crowd's collective estimate of the probability that the event resolves as YES. Markets exist for questions ranging from electoral outcomes (``Will Candidates X win the presidency?'') to financial events (``Will the Federal Reserve cut rates this quarter?'') to sports (``Will Team A win the championship?''). Because participants have real money on the line, prediction market prices tend to be well-calibrated and informationally rich compared to polls or even experts' forecasts.
+
+This raises a natural question: if market prices already aggregate information from thousands of participants, can a machine learning (``ML") model do better? The efficient markets hypothesis would suggest no. Prices should already reflect all publicly available information, leaving little for a model to exploit. At the same time, the real prediction markets are not perfectly efficient. Prices can be slow to update, liquidity varies widely across markets, and signals like public search interest may not be fully priced by users. This could create a setting where ML can add value beyond what the crowd has already priced in.
+
+In this paper, we train and evaluate four classifiers on a dataset of 20,948 resolved Polymarket (which is a prediction market) binary markets to predict whether each market resolves YES or NO. We use features derived from historical market prices, market structure, and Google Trends search interest. Crucially, we evaluate all models against the market price itself as a baseline. This framing lets us ask whether a model is accurate and adds value beyond what the crowd has already priced. We organize our investigation around three research questions:
+\begin{description}[noitemsep, topsep=2pt]
+    \item[\textbf{RQ1:}] Can ML Outperform Market Probabilities?
+    \item[\textbf{RQ2:}] Do Google Trends Features Add Predictive Value?
+    \item[\textbf{RQ3:}] How Do Model Predictions Vary Across the Market Lifecycle?
+\end{description}
+
+% ============================================================
+\section*{2. Related Work}
+% ============================================================
+
+The literature most relevant to this work spans three areas: the forecasting accuracy of prediction market prices and its dependence on time horizon; the ability of machine learning models to extract residual predictive signal from price trajectories; and the incremental value of external signals such as search trends when combined with internal market features.
+
+\subsection*{Finding 1: Prediction Market Prices Are Strong Baselines, But Accuracy Is Horizon-Dependent}
+
+\textbf{Wolfers and Zitzewitz (2004)} survey markets across multiple domains and show that market-generated forecasts typically outperform moderately sophisticated benchmarks, but that this accuracy is horizon-dependent: using Iowa Electronic Markets data across four presidential elections, they show forecast error declining steadily as the event approaches. \textbf{Page and Clemen (2013)} formalize this, theorizing and empirically confirming using 500,000 transactions from 1,787 markets that prices are systematically biased toward 50\% at long horizons due to asymmetric opportunity costs between buyers and sellers, with the bias shrinking as the market approaches resolution. \textbf{Le (2026)} confirms this specifically on Kalshi and Polymarket using 292 million trades across 327,000 markets, (1) finding a calibration slope of 1.32 beyond one month from resolution, which implies that markets systematically underestimate favorites and overestimate longshots at long horizons, and (2) showing miscalibration is domain-dependent: political markets show persistent underconfidence at nearly all horizons, while sports markets are well-calibrated at short-to-medium horizons.
+
+\subsection*{Finding 2: ML Models Can Improve Upon Raw Market Prices by Exploiting Structure the Aggregate Price Obscures}
+
+\textbf{Gruen et al.\ (2023)} provide the most direct demonstration in a prediction market context. Analyzing 1,822 markets on the Almanis platform, they hypothesize that the raw price dilutes signal from traders they classify as accurate, and accordingly train a random forest classifier to identify accurate traders and reweight their contributions. When their adjusted price disagrees with the raw market price, they achieve AUC gains exceeding 13\%. Our work builds on their finding that market structure contains exploitable signal, but differs fundamentally: where they operate at the trader level, we operate at the aggregate market level, engineering temporal features from price trajectories to ask whether the \emph{path} of the market price predicts the outcome better than any single snapshot. \textbf{Deist et al.\ (2018)}, comparing six classifiers across twelve datasets, find that random forest, gradient boosting, and SVM consistently rank among the top performers on AUC, while logistic regression lags in settings with complex feature interactions. This motivates our side-by-side evaluation of multiple model families.
+
+\subsection*{Finding 3: External Signals Add Incremental Value Beyond Internal Market Features}
+
+\textbf{Ginsberg et al.\ (2009)} provide the canonical demonstration that search query volumes capture real-world attention before it appears in structured data, tracking influenza activity one to two weeks faster than CDC surveillance reports. The underlying logic generalizes: search behavior is a potentially valuable leading signal in any forecasting context. \textbf{Gruen et al.\ (2023)} confirm this directly in prediction markets: while their top ten features by importance were all internal, external features consisting of a forecaster's past performance across previous markets contributed incremental value, and their full 43-feature model outperformed an internal-only model. Our work extends this to a different external signal: Google Trends scores at the category level as a proxy for public attention.
+
+\subsection*{Positioning Our Work}
+
+Our work integrates all three strands. Following \textbf{Gruen et al.\ (2023)}, we engineer temporal features from aggregate price trajectories rather than trader-level behavior. Drawing on \textbf{Ginsberg et al.\ (2009)}, we treat Google Trends scores as an explicit external signal to test whether public attention adds predictive value beyond what the market has priced in. Consistent with \textbf{Page and Clemen (2013)} and \textbf{Le (2026)}, we focus on the long-horizon regime where market prices are most biased, and stratify performance metrics by lifecycle stage. Finally, following \textbf{Deist et al.\ (2018)}, we deploy and compare logistic regression, random forests, gradient boosting, and SVM, assessing not just whether ML can beat the market, but which features and modeling approaches drive improvement, and whether performance varies across categories and time horizons.
+% ============================================================
+\section*{3. Data}
+% ============================================================
+
+\subsection*{3.1 Data Sources}
+
+All data is sourced from two data streams supplied by Polymarket. The \textit{Gamma API} gives market level data such as question text, dates and settlement prices; and the \textit{CLOB API} provides price history for each market at 12-hour timestamps.
+
+\subsection*{3.2 Data Collection Pipeline}
+
+When pulling only closed market-level data we filtered to markets with a minimum volume of $\$1,000$ to eliminate thin markets with very little trading activity, a minimum duration of 30 days to ensure sufficient history for rolling features, and a date range from 2023-2026 due to the CLOB price history not being reliably available before this date. For each market, we implemented a 14-day burn-in period so that rolling features have sufficient price history at the first snapshot, and a 14-day cutoff so that no snapshot is taken when the market is approaching resolution because prices are very often already converging toward 0 or 1 and would implicitly leak the outcome.
+
+The Gamma API had a very sparse and often incorrect categorization output, therefore we used the Claude Haiku API to categorize the markets into 9 buckets (\texttt{sports, politics\_us, politics\_global, entertainment, finance, crypto, geopolitics, science\_tech, other}).
+
+Finally, we fetched weekly Google Trends data using five keywords per category (\hyperref[sec:google-trends]{Appendix B} shows the list of keywords used per category). We pulled data from January 2023 to February 2026 for eight of the nine categories (\texttt{other} has no meaningful keyword mapping), averaging the five keyword scores into a single \texttt{trend\_value} on Google's 0--100 relative interest scale.
+
+\subsection*{3.3 Pre-Processing}
+
+The CLOB API returned null prices for 12-hour intervals with insufficient trading activity; these were forward-filled with the last known price, under the assumption that the market was inactive and the true probability had not meaningfully changed. We also found that a market's scheduled \texttt{end\_date} frequently did not match its actual resolution date. Where available, we used the API-reported closedTime as the true close; where this was null, we used the date of the last observed price change, as stale prices were observed to persist for extended periods after a market had effectively resolved.
+
+\subsection*{3.4 Feature Engineering}
+
+\hyperref[sec:appendix_features]{Appendix C} shows the list of features used. The 7-day and 14-day rolling windows are meant to show the momentum and mean-reversion dynamics. The rolling windows capture momentum and mean-reversion dynamics at two timescales, allowing models to detect divergence between short and medium-term signals. Within each window we compute the mean (a smoothed price estimate), volatility (market uncertainty), min and max (range endpoints), price change (directional drift), range (total movement regardless of direction), and linear trend slope (sustained drift versus noise). Additional engineered features include log volume, price deviation from 0.5, and days before close.
+
+From the weekly Trends signal we derived four features per snapshot, a raw score, 4-week moving average, 4-week change, and a spike flag, which we joined via backward-fill so each snapshot inherits the most recent completed week.
+
+\subsection*{3.5 Data Exploration}
+
+The final dataset contains 20,948 markets, 1,448,142 snapshots, 27 features, and 9 categories. Table 2, 3 and 4 summarize the distribution of markets by duration, volume, and category. After pre-processing, the dataset contains no null values, and 99.6\% of snapshots have valid trend data; the remaining 0.4\% are set to 0.
+
+The dataset exhibits strong class imbalance: 80.3\% of markets resolved NO and 19.7\% YES. At the snapshot level the imbalance is slightly less severe, with 77.9\% NO and 22.1\% YES, as YES markets tend to be longer-lived and generate more snapshots. This imbalance means raw accuracy is a misleading metric. How we handle it is discussed further in the Methods section.
+
+Figure~\ref{fig:calibration} shows the calibration curve of market price against realized YES fraction. The curve tracks the perfect calibration diagonal closely across the full range, with a minor deviation in the 0.35–0.55 region. The large bubble near 0.05 reflects the high concentration of NO markets.
+
+\begin{table}[h]
+\centering
+\footnotesize
+\begin{minipage}[t]{0.48\columnwidth}
+    \centering
+    \setlength{\tabcolsep}{3pt}
+    \begin{tabular}{lrr}
+    \toprule
+    \textbf{Duration} & \textbf{Count} & \textbf{\%} \\
+    \midrule
+    30--60 days   & 8,749 & 36.3\% \\
+    60--90 days   & 3,637 & 15.1\% \\
+    90--180 days  & 5,895 & 24.5\% \\
+    180--365 days & 5,104 & 21.2\% \\
+    365+ days     & 707   & 2.9\%  \\
+    \bottomrule
+    \end{tabular}
+    \vspace*{\fill}
+    \caption{By duration.}
+    \label{tab:duration}
+\end{minipage}
+\hfill
+\begin{minipage}[t]{0.48\columnwidth}
+    \centering
+    \setlength{\tabcolsep}{3pt}
+    \begin{tabular}{lrr}
+    \toprule
+    \textbf{Volume} & \textbf{Count} & \textbf{\%} \\
+    \midrule
+    \$1k--\$10k   & 6,010 & 24.9\% \\
+    \$10k--\$100k & 9,513 & 39.5\% \\
+    \$100k--\$1M  & 6,088 & 25.3\% \\
+    \$1M+         & 2,481 & 10.3\% \\
+    \bottomrule
+    \end{tabular}
+    \vspace*{\fill}
+    \caption{By volume.}
+    \label{tab:volume}
+\end{minipage}
+\end{table}
+
+\begin{table}[h]
+\centering
+\footnotesize
+\begin{tabular}{lrr}
+\toprule
+\textbf{Category} & \textbf{Count} & \textbf{\%} \\
+\midrule
+sports           & 7,081 & 29.4\% \\
+politics\_us     & 3,751 & 15.6\% \\
+entertainment    & 3,553 & 14.7\% \\
+finance          & 2,846 & 11.8\% \\
+crypto           & 2,367 & 9.8\%  \\
+politics\_global & 1,900 & 7.9\%  \\
+geopolitics      & 1,292 & 5.4\%  \\
+science\_tech    & 1,149 & 4.8\%  \\
+other            & 152   & 0.6\%  \\
+\bottomrule
+\end{tabular}
+\caption{Distribution of markets by category.}
+\label{tab:categories}
+\end{table}
+\begin{figure}[H]
+    \centering
+    \includegraphics[width=0.24\textwidth]{figures/calibration_curve.png}
+    \caption{Market price calibration on the training split.}
+    \label{fig:calibration}
+\end{figure}
+
+\subsection*{3.6 Train / Test Split}
+
+Markets are split temporally at the market level: the oldest 80\% by creation date form the training set and the newest 20\% form the test set. This design prevents any snapshot from a test market appearing in training to simulate real-world use cases where models are evaluated on future markets. On top of this, the YES rate is consistent across splits (22.4\% vs 21.0\%), suggesting the class imbalance is stable over time.
+
+\begin{table}[h]
+\centering
+\footnotesize
+\begin{tabular}{lrrr}
+\toprule
+\textbf{Split} & \textbf{Markets} & \textbf{Snapshots} & \textbf{YES Rate} \\
+\midrule
+Train & 16,774 & 1,159,652 & 22.4\% \\
+Test  & 4,174  & 288,490   & 21.0\% \\
+\bottomrule
+\end{tabular}
+\caption{Train/test split}
+\label{tab:split}
+\end{table}
+
+\section*{4. Methods}
+% ============================================================
+
+We look at the prediction task as a binary classification. Given a snapshot of a market at a point in time, predict whether the market resolves YES (1) or NO (0). All models are trained on the same feature set and evaluated against the same held-out test.
+
+\subsection*{4.1 Baseline}
+
+Our baseline predicts YES if the current market price exceeds 0.5 and NO otherwise. This shows the crowd's consensus at the time of the particular snapshot. Any model that fails to beat this baseline offers no practical improvement over just simply reading the market price, which makes this a meaningful bar to interpret for RQ1.
+
+\subsection*{4.2 Logistic Regression}
+
+We train a Logistic Regression (``LR") model with L2 regularization selected via 5-fold cross-validation over $C \in \{0.01, 0.1, 1.0, 10.0, 100.0\}$ and penalty type (L1 and L2), scored by AUC-ROC. The best configuration (C = 0.01, L2, \texttt{lbfgs} solver) is then fit on 80\% of training markets (929,967 snapshots across 13,420 markets). The remaining 20\% of training markets (229,685 snapshots) are held out as a calibration set, on which isotonic regression is fit to correct systematic probability distortion in the raw outputs. To account for our class imbalance (78\% NO, 22\% YES) and prevent markets with many snapshots from dominating, training uses balanced class weights scaled by the inverse snapshot count per market. Logistic regression serves as a linear interpretable baseline. Its coefficients directly indicate the direction and magnitude of each feature's linear contribution to the predicted log-odds.
+
+\subsection*{4.3 Random Forest}
+
+We train a Random Forest (``RF") of 300 trees with maximum depth 16, minimum samples per leaf of 50, and \texttt{sqrt} feature sampling at each split. Cross-validation uses 5-fold \texttt{StratifiedGroupKFold} with market ID as the grouping key, which ensures that no market appears in both the training and validation fold of any split. After selecting hyperparameters, we fit the final model on 80\% of the training data and apply isotonic regression calibration on the remaining 20\% to improve the quality of our predicted probabilities. Random Forest is a powerful model since it captures non-linear interactions between price, lifecycle position, and volatility that a linear model would not be able to capture.
+
+\subsection*{4.4 Gradient Boosting}
+
+We train an XGBoost (``GB") model using a 3-way market-level split of the training data. We search over learning rate $\in \{0.01, 0.05, 0.1\}$ and maximum depth $\in \{4, 6, 8\}$ (9 combinations), selecting the hyperparameters by early stopping (50-round patience on validation log loss) on a held-out 15\% of training markets (171,723 snapshots). The best configuration (learning rate = 0.05, maximum depth = 8) is then retrained, and a separate 20\% of the remaining training markets (197,450 snapshots) is held out exclusively for isotonic calibration. The final model uses up to 1,000 estimators with row and feature subsampling rates of 0.8.
+
+All tree-based models apply isotonic regression calibration on their calibration sets using \texttt{CalibratedClassifierCV} with \texttt{cv="prefit"}, which maps raw predicted probabilities to empirical outcome frequencies without altering the model's discriminative ranking. View \hyperref[sec:calibration-curves]{Appendix D} for the calibration curves for all models (market, base, and trends).
+
+\subsection*{4.5 Support Vector Machine}
+
+We train an SVM with an RBF kernel (C = 10, $\gamma$ = 0.001) with balanced class weights and Platt scaling to produce our calibrated probability outputs. Prior to training, numeric features are standardized with zero mean and unit variance. Due to the computational cost of kernel SVMs on large datasets, we subsample the data to seven fixed lifetime-percentile snapshots per market (at the 20th, 30th, 40th, 50th, 60th, 70th, and 80th percentile of each market's lifetime), giving us 146,636 rows across all 20,948 markets. SVM results are evaluated on a different test subset than the other models: 29,218 rows vs.\ 288,490 for LR, GB, and RF. The SVM test set also excludes the earliest and latest snapshots, which tend to be the hardest and easiest to predict respectively. Direct metric comparisons between SVM and the other models should therefore be interpreted with caution. The SVM is included to assess whether a margin-based classifier with a non-linear kernel extracts signal that tree-based methods miss.
+
+\subsection*{4.6 Evaluation Metrics}
+
+We report three metrics for each model.
+\textbf{AUC-ROC} measures the model's ability to rank positive outcomes above negative ones across all classification thresholds, and is our primary discrimination metric.
+\textbf{Log loss} penalizes confident wrong predictions and it rewards well-calibrated probabilities. This makes it particularly relevant when we compare it against a market price that is itself a probability estimate.
+\textbf{Brier Score} measures the mean squared error between predicted probabilities and true outcomes. All models are evaluated on a held-out test set of 288,490 snapshots across 4,174 markets that were not seen during training.
+
+% ============================================================
+\section*{5. Analysis}
+% ============================================================
+
+\subsection*{5.1 RQ1: Can ML Outperform Market Probabilities?}
+  Table~\ref{tab:results} reports snapshot-level
+   performance for all models on the
+  held-out test set of 288,490 snapshots across
+  4,174 markets. SVM was trained on a subsampled dataset of seven fixed lifetime-percentile snapshots per market due to the computational infeasibility of kernel SVMs on 1M+ snapshots; its results are therefore evaluated on a different test subset and are not directly comparable to the other models. For this reason, all subsequent analysis excludes SVM and focuses on LR, GB, and RF. We report four metrics: AUC-ROC as the primary discrimination measure, PR-AUC to account for class imbalance, log loss and Brier score to evaluate probability calibration quality.
+
+\begin{table}[H]
+\centering
+\footnotesize
+\setlength{\tabcolsep}{4pt}
+\begin{tabular}{lcccc}
+\toprule
+\textbf{Model} & \textbf{AUC-ROC} & \textbf{PR-AUC} & \textbf{Log-loss} & \textbf{Brier} \\
+\midrule
+Market Baseline        & 0.8890 & 0.7440 & 0.3278 & 0.1004 \\
+\midrule
+LR                     & 0.8874 & 0.7101 & 0.3317 & 0.0980 \\
+LR + Trends            & 0.8868 & 0.7096 & 0.3301 & 0.0980 \\
+GB                     & 0.9000 & 0.7445 & 0.3073 & 0.0941 \\
+GB + Trends            & 0.9019 & 0.7525 & 0.3043 & 0.0930 \\
+RF                     & 0.9018 & 0.7527 & 0.3027 & 0.0922 \\
+RF + Trends            & \textbf{0.9034} & \textbf{0.7598 }& \textbf{0.3011} & \textbf{0.0914} \\
+\midrule
+SVM Baseline$^\dagger$ & 0.9402 & 0.8229 & 0.2196 & 0.0655 \\
+SVM$^\dagger$          & 0.9398 & 0.8126 & 0.2226 & 0.0651 \\
+SVM + Trends$^\dagger$ & 0.9405 & 0.8138 & 0.2217 & 0.0649 \\
+\bottomrule
+\end{tabular}
+\caption{Test set performance (288,490 snapshots, 4,174 markets). $\dagger$SVM not directly comparable.}
+\label{tab:results}
+\end{table}
+\begin{figure}[H]
+    \centering
+    \begin{subfigure}[t]{0.48\columnwidth}
+        \includegraphics[width=\linewidth]{figures/ROC Curve.png}
+        \caption{ROC Curve}
+        \label{fig:roc}
+    \end{subfigure}
+    \hfill
+    \begin{subfigure}[t]{0.48\columnwidth}
+        \includegraphics[width=\linewidth]{figures/PR Curve.png}
+        \caption{PR Curve}
+        \label{fig:pr}
+    \end{subfigure}
+    \caption{ROC and PR curves for all models.}
+    \label{fig:roc_pr}
+\end{figure}
+Table~\ref{tab:results} and Figure~\ref{fig:roc_pr} illustrate that tree-based models (GB and RF)
+consistently outperform both the
+market baseline and the LR across
+all metrics, both with and without the inclusion of Google Trends. LR underperforms not only GB and RF, but also the market baseline, suggesting that its inability to capture non-linear interactions between features renders it no better than price alone. For example, LR assigns a fixed weight to price, regardless of context: it cannot distinguish between a price of 0.4 at 10\% through a market's life versus 90\% through it; RF and GB, on the other hand, can learn these interactions automatically through recursive tree splits. This finding is consistent with Deist et al. (2018), who find logistic regression underperforms ensemble methods specifically in settings with complex feature interactions. RF outperforms GB on both discrimination (AUC without Trends: 0.9018 vs 0.9000) and probability accuracy (Brier score without Trends: 0.0922 vs 0.0941), indicating that RF's variance reduction through averaging outweighs GB's bias reduction through sequential residual-targeting. GB's sequential boosting pushes predicted probabilities towards the extremes, while RF's predicted probabilities are averaged across 300 trees and are therefore less extreme. GB's extreme probabilities yield lower per-example Brier on correct predictions but higher per-example Brier on incorrect ones; RF's moderate probabilities hedge in both directions. On this dataset, GB's overconfident mistakes appear to dominate the gains from its confident correct predictions, resulting in a net higher Brier score relative to RF. RF + Trends achieves the
+best overall performance on the full test set, both in terms of discrimination (highest AUC) and probability accuracy (lowest Brier score). This suggests that Google Trends features provide small but consistent incremental improvements. The next subsection analyzes the impact of adding Google Trends features to our models.
+
+\subsection*{5.2 RQ2: Do Google Trends Features Add Predictive Value?}
+
+  We augment each model's base feature set with five Google Trends-derived
+  features constructed weekly per category and merged into snapshots.
+  Table~\ref{tab:trends_delta} reports the change in metrics when
+  Trends features are added.
+
+  \begin{table}[h]
+  \centering
+  \footnotesize
+  \setlength{\tabcolsep}{3pt}
+  \begin{tabular}{lcccccc}
+  \toprule
+  Model & AUC (base) & AUC (trends) & $\Delta$AUC & $\Delta$Log-loss & $\Delta$Brier \\
+  \midrule
+  LR & 0.8874 & 0.8868 & $-$0.0006 & $-$0.0012 & 0.0000  \\
+  GB & 0.9000 & 0.9019 & $+$0.0019 & $-$0.0029 & $-$0.0011 \\
+  RF & 0.9018 & 0.9034 & $+$0.0011 & $-$0.0018 & $-$0.0008 \\
+  \bottomrule
+  \end{tabular}
+  \caption{Impact of Google Trends features on test-set performance.
+  Negative $\Delta$Log-loss and $\Delta$Brier indicate improvement.}
+  \label{tab:trends_delta}
+  \end{table}
+
+  GB gains the most ($+$0.0019 AUC), RF gains modestly ($+$0.0011),
+  and LR loses slightly ($-$0.0006). The pattern reflects how each
+  model handles weakly-correlated inputs: Trends features correlate
+  with outcome only between $r = -0.05$ and $r = +0.14$, so LR
+  derives little signal from any individual feature and is slightly
+  hurt by the added noise. Tree-based models, by contrast, can isolate
+  the rare configurations where a category-level spike crosses a
+  threshold that is meaningful for resolution and ignore it elsewhere.
+
+  Table~\ref{tab:feature_importance} shows the features by impurity-based importance for each tree model. No Trends feature appears in the top
+  5 for either model, which is consistent with the modest overall AUC
+  gains. GB concentrates 37.5\% of its importance on the current price
+  alone, treating the snapshot price as a near-sufficient statistic,
+  while RF spreads importance more evenly across rolling window
+  features, finding additional signal in price extremes over longer
+  windows.
+
+  \begin{table}[h]
+  \centering
+  \footnotesize
+  \setlength{\tabcolsep}{3pt}
+  \begin{minipage}{0.48\columnwidth}
+      \centering
+      \begin{tabular}{clc}
+      \toprule
+      Rank & Feature & Imp. \\
+      \midrule
+      1 & Price at snapshot    & 0.375 \\
+      2 & Price mean (7d)      & 0.183 \\
+      3 & Price dev.\ from 0.5 & 0.053 \\
+      4 & Price min (7d)       & 0.047 \\
+      5 & Log volume           & 0.018 \\
+      \bottomrule
+      \end{tabular}
+      \caption*{\textbf{GB}: Top 5 Features}
+  \end{minipage}
+  \hfill
+  \begin{minipage}{0.48\columnwidth}
+      \centering
+      \begin{tabular}{clc}
+      \toprule
+      Rank & Feature & Imp. \\
+      \midrule
+      1 & Price max (7d)    & 0.172 \\
+      2 & Price max (14d)   & 0.127 \\
+      3 & Price at snapshot & 0.114 \\
+      4 & Price mean (7d)   & 0.090 \\
+      5 & Price min (7d)    & 0.082 \\
+      \bottomrule
+      \end{tabular}
+      \caption*{\textbf{RF}: Top 5 Features}
+  \end{minipage}
+  \caption{Top 5 features by Gini importance for GB and RF.}
+  \label{tab:feature_importance}
+  \end{table}
+
+  Among the five Trends features, \texttt{trend\_spike} ($r = +0.14$)
+  and \texttt{trend\_change\_4w} ($r = +0.10$) carry the most signal,
+  as sudden spikes and momentum capture breaking developments being
+  actively re-priced rather than sustained baseline interest. However,
+  the slower-moving features \texttt{trend\_ma4} and
+  \texttt{trend\_value} also hold small but nonzero importance in both
+  GB and RF, suggesting that even gradual shifts in category-level
+  attention contribute incrementally to the tree models' predictions.
+  The aggregate effect of these individually small contributions is
+  consistent with the AUC gains observed, and explains why the gains
+  appear in tree-based models that can detect nonlinear threshold
+  effects, but not in LR where each feature must carry standalone
+  linear signal.
+
+Figures~\ref{fig:LR},~\ref{fig:GB}, and~\ref{fig:RF} show $\Delta$AUC by category.
+  Geopolitics is the standout for GB ($+$0.0125), finance gains
+  consistently across GB ($+$0.0062) and RF ($+$0.0027), while
+  Politics and Entertainment show near-zero or negative deltas across
+  all models due to the variety of markets that cannot be captured
+  with just five keywords. This variation across categories mirrors Le (2026)'s finding that miscalibration severity varies by market category.
+
+  \begin{figure}[H]
+      \centering
+      \begin{subfigure}[t]{0.48\columnwidth}
+          \includegraphics[width=\linewidth]{figures/LR Trends Lift.png}
+          \caption{LR}
+          \label{fig:LR}
+      \end{subfigure}
+      \hfill
+      \begin{subfigure}[t]{0.48\columnwidth}
+          \includegraphics[width=\linewidth]{figures/GB Trends Lift.png}
+          \caption{GB}
+          \label{fig:GB}
+      \end{subfigure}
+      \\[0.5em]
+      \begin{subfigure}[t]{0.48\columnwidth}
+          \includegraphics[width=\linewidth]{figures/RF Trends Lift.png}
+          \caption{RF}
+          \label{fig:RF}
+      \end{subfigure}
+      \caption{$\Delta$AUC-ROC (Trends $-$ Base) by category.}
+      \label{fig:trends_lift_by_category}
+  \end{figure}
+
+
+
+\subsection*{5.3 RQ3: How Do Model Predictions Vary Across the Market Lifecycle?}
+
+We examine two views of market difficulty: where a snapshot falls
+within a market's own lifetime, and how long the market runs overall.
+
+\subsubsection*{Per-Market Lifecycle Stage}
+
+We divide each market's snapshots into thirds of elapsed lifetime
+(\texttt{pct\_lifetime\_elapsed}): Far (0--33\%), Mid (33--67\%),
+and Near (67--100\%). This treats short and long markets symmetrically (Figure~\ref{fig:lifecycle_per_market}).
+
+In the Far stage, GB and RF beat the baseline by $+$0.016--0.019
+AUC; by the Near stage these gaps shrink to $+$0.003--0.006,
+confirming that ML adds the most value when prices are still
+uncertain. LR falls below or matches baseline at every stage.
+Trends features help modestly in Far and Mid, but RF+Trends
+(0.936) falls just below plain RF (0.937) in the Near stage,
+suggesting category-level attention introduces noise once the
+price signal is already strong.  This result is consistent with Page and Clemen (2013) and Le (2026), both of which show that market prices are most miscalibrated at long horizons, leaving the greatest room for model improvement.
+
+\begin{figure}[H]
+    \centering
+    \includegraphics[width=\columnwidth]{figures/ROC by Market Lifecycle.png}
+    \caption{AUC-ROC per lifecycle stage.}
+    \label{fig:lifecycle_per_market}
+\end{figure}
+
+\subsubsection*{AUC by Market Duration}
+From Figure~\ref{fig:duration_auc}, medium-duration markets (91--180d) are the hardest for both markets
+and models (baseline 0.8650). Long markets (181--365d) show the
+largest ML gains: GB exceeds baseline by $+$0.023, RF by $+$0.021,
+while LR falls below by $-$0.008. Very long markets ($>$365d) already
+have a high baseline (0.9698), leaving limited room for improvement.
+LR is the only model that consistently falls below baseline for
+markets longer than 90 days, reinforcing that a linear boundary is
+insufficient for complex long-horizon tasks.
+
+\begin{figure}[H]
+    \centering
+    \includegraphics[width=\columnwidth]{figures/AUC by Market Duration.png}
+    \caption{AUC-ROC by duration bucket.}
+    \label{fig:duration_auc}
+\end{figure}
+
+% =======================================================
+\subsection*{5.4 Error Analysis}
+
+\begin{table}[h]
+\centering
+\footnotesize
+\begin{tabular}{lrrrrr}
+\toprule
+\textbf{Model} & \textbf{Correct} & \textbf{Dir Wrong} & \textbf{OC Wrong} \\
+\midrule
+LR      & 87.1\% & 12.9\% & 5.3\% \\
+LR+Tr   & 87.1\% & 12.9\% & 5.4\% \\
+GB      & 86.3\% & 13.7\% & 4.4\% \\
+GB+Tr   & 87.3\% & 12.7\% & 4.1\% \\
+RF      & 84.6\% & 15.4\% & 4.3\% \\
+RF+Tr   & \textbf{87.7\%} & \textbf{12.3\%} & \textbf{4.1\%} \\
+\bottomrule
+\end{tabular}
+\caption{Error taxonomy across all models. Dir = Directional errors (predicting the wrong outcome). OC = overconfident wrong (predicted $> 0.8$ for a NO outcome, or $< 0.2$ for a YES outcome).}
+\label{tab:error_taxonomy}
+\end{table}
+This section investigates where and why our models fail. In Table~\ref{tab:error_taxonomy}, we separate the errors into two main buckets, directional errors and overconfident errors. Directional errors are a simple metric that totals the number of wrong predictions and overconfident errors occur when a prediction is greater than 0.8 or less than 0.2 and are incorrect. Because the dataset is strongly imbalanced toward NO outcomes, directional accuracy should be interpreted relative to the market baseline rather than in isolation.
+
+All models achieve between 84.6\% and 87.7\% directional accuracy. RF+Tr is the strongest at 87.7\%. More importantly, tree-based models with trends (GB+Tr, RF+Tr) achieve the lowest overconfident wrong rates (4.1\%), suggesting that richer features reduce the most damaging failures. LR and LR+Tr have a surprisingly high correct rate relative to the other models, counterintuitive given their AUC-ROC performance. What accounts for the gap is their overconfident wrong rate at 5.3--5.4\%.
+
+To give a more thorough analysis of the errors, we will concentrate on the best performing model, the RF+Tr model. We noticed that 60.7\% of RF+Tr overconfident errors were also overconfident errors by the market price alone, which means that the market itself was already highly wrong in those cases, and the model simply followed the crowd into the error. These instances could potentially be a direct manifestation of the exact problem Gruen et al. (2023) identified, where the raw market price is miscalibrated by inaccurate traders. On top of this we noticed that 10,339 out of the 11,948 snapshots are overconfident NO errors, which reflects the class imbalance closely. If we analyze the categories in which the model gets the most over-confidently wrong predictions (Table~\ref{tab:oc_by_category}), we see that sports carries the highest rate at 5.57\%, much higher than its market rate at 3.87\%. This is consistent and expected behavior due to sports markets being inherently harder to predict as it depends on real-world performance that price cannot fully anticipate. On the other hand, geopolitics is the most reliable at just 1.16\%; this could be due to geopolitics markets often sitting at extremes for long periods.
+
+\begin{table}[h]
+\centering
+\footnotesize
+\begin{tabular}{lrrrr}
+\toprule
+\textbf{Category} & \textbf{Snapshots} & \textbf{Rate} & \textbf{MarketRate} \\
+\midrule
+sports           & 93,022 & 5.57\% & 3.87\% \\
+other            & 1,364  & 4.55\% & 1.47\% \\
+politics\_us     & 52,699 & 4.51\% & 4.28\% \\
+science\_tech    & 15,530 & 4.15\% & 3.12\% \\
+politics\_global & 22,591 & 4.13\% & 3.76\% \\
+crypto           & 24,586 & 3.25\% & 2.87\% \\
+entertainment    & 37,027 & 2.91\% & 2.34\% \\
+finance          & 25,093 & 2.73\% & 1.57\% \\
+geopolitics      & 16,578 & 1.16\% & 1.15\% \\
+\bottomrule
+\end{tabular}
+\caption{Overconfident wrong rates by category for RF+Tr, compared against the market price baseline.}
+\label{tab:oc_by_category}
+\end{table}
+
+Looking at the market's lifecycle (Table~\ref{tab:lifecycle_volume}), there is no clear pattern in the overconfident wrong rate across stages, but directional errors increase monotonically through the market's life. A similar trend holds for volume, directional error rises from 8.7\% in the lowest volume quartile to 14.9\% in the highest.
+
+\begin{table}[h]
+\centering
+\footnotesize
+\setlength{\tabcolsep}{4pt}
+\begin{minipage}{0.54\columnwidth}
+    \centering
+    \begin{tabular}{lrr}
+    \toprule
+    \textbf{Lifecycle} & \textbf{OC Rate} & \textbf{Dir Wrong} \\
+    \midrule
+    Early     & 3.73\% & 10.42\% \\
+    Mid-early & 4.30\% & 13.03\% \\
+    Mid-late  & 4.54\% & 13.56\% \\
+    Late      & 3.98\% & 14.31\% \\
+    \bottomrule
+    \end{tabular}
+\end{minipage}
+\hfill
+\begin{minipage}{0.38\columnwidth}
+    \centering
+    \begin{tabular}{lr}
+    \toprule
+    \textbf{Volume} & \textbf{Dir Wrong} \\
+    \midrule
+    Q1 (low)  & 8.7\%  \\
+    Q2        & 10.9\% \\
+    Q3        & 14.8\% \\
+    Q4 (high) & 14.9\% \\
+    \bottomrule
+    \end{tabular}
+\end{minipage}
+\caption{Overconfident and directionally wrong rates by lifecycle stage and volume quartile.}
+\label{tab:lifecycle_volume}
+\end{table}
+
+\subsection*{5.5 Trading Simulation}
+To evaluate the models in the real-world, we simulated a trading strategy where each model's predicted probability is compared against the market price, and a position is bought when the two disagree beyond a threshold. A trade is entered whenever $|p_{\text{model}} - p_{\text{market}}|$ exceeds a fixed threshold of $\tau = 0.02$, which was chosen a priori and not tuned on the test set. Each YES position costs $p_{\text{market}}$ per token and pays $1$ at resolution, so   profit per trade is $\text{outcome} - p_{\text{market}}$ for YES bets and $p_{\text{market}} - \text{outcome}$ for NO bets.   Multiple concurrent positions across different markets are permitted, and ROI is computed as cumulative profit divided by
+cumulative capital deployed across all trades. No transaction costs, slippage, or liquidity constraints are modeled, so results represent an upper bound on real-world performance. This simulation is performed on test-set predictions and assumes no transaction costs or slippage. The best performing model, GB with trends, generated \$18,097 (as in Figure~\ref{fig:simulation}) in profit across 217,570 trades at a 27.5\% ROI and a 73.8\% win rate. GB+Tr maintains 20 to 31\% ROI across entry horizons from 7 to 90 days after market open, peaking at 48\% ROI when entering at day 11. LR is the clear outlier, trailing every tree-based model with an ROI at around 17\%, despite a comparable win rate of 70\%. The naive baseline of always buying NO (the more common outcome) returns 7.26\% ROI, which is below every trained model, confirming that blind betting alone is insufficient. Crucially, even the weakest model (LR) adds nearly 10\% of ROI on top of this, suggesting that the learned signal is genuine rather than noise.
+
+\begin{figure}[H]
+    \centering
+    \includegraphics[width=0.45\textwidth]{figures/pl.png}
+    \caption{Comparison of the models' profit and loss over time.}
+    \label{fig:simulation}
+\end{figure}
+
+\subsection*{5.6 Limitations}
+The primary limitation of our work concerns the granularity of the Google Trends features. First, while Google Trends data are available at daily resolution, the daily historical coverage did not span the full time period of markets in our dataset. We therefore fell back on weekly data, assigning all snapshots within a given week the same Trends value; this is a coarse approximation that obscures within-week variation in public attention. Second, our Trends features were constructed at the category level, meaning a single time series (e.g., search interest for ``sports'') was shared across all markets in that category regardless of their specific subject matter. Question-level queries would more precisely capture the public attention relevant to each individual market outcome. Future work could address both issues simultaneously by restricting the dataset to a shorter time window (one for which daily Trends data are available) and constructing Trends features at the question level.
+
+A second limitation concerns how the models treat snapshots from the same market. Although features such as \texttt{price\_change\_7d} and \texttt{pct\_lifetime\_elapsed} provide each snapshot with temporal context, all models in this work treat snapshots as independent training examples. The model therefore has no mechanism to enforce consistency across the trajectory of a single market. In other words, from the model's perspective, two snapshots drawn from the same market are no different from two snapshots drawn from entirely different markets. A natural extension would be to model each market's snapshot sequence explicitly using a recurrent architecture such as an LSTM or GRU, which would allow the model to condition each prediction on the full history of that market rather than a fixed window of engineered features.
+
+% ============================================================
+\section*{6. Conclusion}
+% ============================================================
+
+In this paper we trained and evaluated machine learning models on a dataset of 20,948 resolved Polymarket YES or NO markets to investigate whether ML can outperform market probabilities. We collected 1,448,142 snapshots of price history, engineered rolling features at 7-day and 14-day windows. Additionally, we wanted to evaluate if we could improve our models by using real-time search activity by augmenting the dataset with Google Trends search at the category level.
+
+For RQ1, which looked at whether ML models can beat market price as a predictor of final outcome, we saw tree-based models consistently outperform the market
+baseline while Logistic Regression does not, confirming that
+nonlinear interactions between price, lifecycle position, and
+volatility are necessary to extract residual signal. Random Forest
+achieves the best single-model AUC of 0.9034 and Gradient Boosting
+0.9019, against a baseline of 0.8890.
+
+For RQ2, which evaluated whether Google Trends improved model performance, we found that Trends features provide small but consistent gains for
+tree-based models ($+$0.0019 AUC for GB, $+$0.0011 for RF),
+concentrated in event-driven categories such as geopolitics and
+finance. Spike and momentum features drive these gains rather than
+raw search volume, suggesting that abrupt shifts in public attention
+carry more predictive value than sustained baseline interest.
+Logistic Regression receives no benefit, consistent with the weak
+linear correlation between Trends features and outcome.
+
+For RQ3, which examined how models behaved in different market lifecycles, we discovered that ML adds the most value early in a market's life, where
+prices are most uncertain. In the Far stage, GB and RF exceed the
+baseline by $+$0.016--0.019 AUC; by the Near stage this gap shrinks
+to $+$0.003--0.006 as prices converge toward the true outcome.
+
+The trading simulation showed us that these findings do carry weight in the real world. GB with trends generates \$18,097 in profit at a 27.5\% ROI and 73.8\% win rate.
+
+The primary limitations for future work to address are the coarse weekly resolution and category-level aggregation of the Trends features, and the treatment of snapshots as independent observations despite belonging to correlated market trajectories.
+
+% ============================================================
+% Wide tables --- span both columns
+% ============================================================
+
+% ============================================================
+\clearpage
+\newpage
+\onecolumn
+\section*{Appendix}
+% ============================================================
+
+\subsection*{Appendix A. References}
+
+\begin{enumerate}[label={[\arabic*]}]
+    \item Wolfers, J., \& Zitzewitz, E. (2004). Prediction markets. \textit{Journal of Economic Perspectives}, 18(2), 107--126.
+    \item Page, L., \& Clemen, R. T. (2013). Do prediction markets produce well-calibrated probability forecasts? \textit{The Economic Journal}, 123(568), 491--513.
+    \item Le, N. A. (2026). Decomposing crowd wisdom: Domain-specific calibration dynamics in prediction markets. \textit{arXiv preprint arXiv:2602.19520}.
+    \item Gruen, A., Mattingly, K.R., Morwitch, E., et al.\ (2023). Machine learning augmentation reduces prediction error in collective forecasting. \textit{eBioMedicine}, 96, 104783.
+    \item Deist, T.M., et al.\ (2018). Machine learning algorithms for outcome prediction in (chemo)radiotherapy. \textit{Medical Physics}, 45(7), 3449--3459.
+    \item Ginsberg, J., et al.\ (2009). Detecting influenza epidemics using search engine query data. \textit{Nature}, 457(7232), 1012--1014.
+\end{enumerate}
+\phantomsection
+\subsection*{Appendix B. Google Trends Keywords}
+\label{sec:google-trends}
+\begin{table}[H]
+\centering
+
+\begin{tabular}{ll}
+\toprule
+\textbf{Category} & \textbf{Keywords} \\
+\midrule
+\texttt{politics\_us}     & Trump, Biden, Congress, \\
+                          & White House, election \\
+\texttt{politics\_global} & world news, international news, \\
+                          & United Nations, foreign policy, \\
+                          & global politics \\
+\texttt{crypto}           & Bitcoin, Ethereum, \\
+                          & cryptocurrency, crypto, blockchain \\
+\texttt{sports}           & NFL, NBA, soccer, MLB, tennis \\
+\texttt{finance}          & stock market, Federal Reserve, \\
+                          & interest rates, inflation, S\&P 500 \\
+\texttt{geopolitics}      & Ukraine war, Middle East, \\
+                          & Gaza, Russia, NATO \\
+\texttt{science\_tech}    & artificial intelligence, ChatGPT, \\
+                          & SpaceX, climate change, technology \\
+\texttt{entertainment}    & Taylor Swift, Netflix, \\
+                          & movies, music, celebrity \\
+\texttt{other}            & --- (no trend data assigned) \\
+\bottomrule
+\end{tabular}
+\caption{Google Trends Keywords by Market Category}
+\label{tab:trends_keywords}
+\end{table}
+
+\phantomsection
+\subsection*{Appendix C. Feature Engineering Details}
+\label{sec:appendix_features}
+\begin{table}[H]
+\centering
+\begin{tabular}{ll}
+\toprule
+\textbf{Group} & \textbf{Features} \\
+\midrule
+Identity     & \texttt{market\_id}, \texttt{snapshot\_timestamp}, \texttt{split}, \\
+& \texttt{category}, \texttt{question} \\
+\midrule
+Time         & \texttt{days\_before\_close}, \texttt{pct\_lifetime\_elapsed}, \\ & \texttt{duration\_days} \\
+\midrule
+Price        & \texttt{price\_at\_snapshot} ($P(\text{YES})$), \\ & \texttt{price\_deviation\_from\_half} \\
+\midrule
+Rolling 7d   & \texttt{price\_mean\_7d}, \texttt{price\_volatility\_7d}, \\ & \texttt{price\_min\_7d},  \texttt{price\_max\_7d}, \texttt{price\_change\_7d}, \\ & \texttt{price\_range\_7d}, \texttt{price\_trend\_7d} \\
+\midrule
+Rolling 14d  & Same 7 features with \texttt{\_14d} suffix \\
+\midrule
+Volume       & \texttt{total\_volume}, \texttt{log\_volume} \\
+\midrule
+Trends       & \texttt{trend\_value}, \texttt{trend\_ma4}, \texttt{trend\_change\_4w}, \\ &\texttt{trend\_spike},\texttt{has\_trend\_data} \\
+\midrule
+Target       & \texttt{outcome} (1 = YES, 0 = NO) \\
+\bottomrule
+\end{tabular}
+\caption{Feature groups}
+\label{tab:features}
+\end{table}
+
+\phantomsection
+\subsection*{Appendix D. Calibration Curves}
+\label{sec:calibration-curves}
+\begin{figure}[H]
+    \centering
+    \includegraphics[width=\columnwidth]{figures/Calibration Curves.png}
+    \caption{Calibration Curves for Each Model.}
+    \label{fig:calibration-curves}
+\end{figure}
+
+
+\end{document}

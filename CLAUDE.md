@@ -10,6 +10,7 @@ This file is read by Claude Code at the start of every session. Keep it under 20
 
 ML models on historical Polymarket binary prediction markets to forecast YES/NO outcomes.
 Originally NYU DS-GA 1003 (team of 3). Now being productionized into a full-stack app.
+The course paper (research questions, methods, reported results) is `docs/paper/paper.tex`; see `docs/paper/README.md` for how its numbers relate to the current data.
 
 **Target architecture:** data pipeline → PostgreSQL (Supabase) → FastAPI → React → model serving.
 
