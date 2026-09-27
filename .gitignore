@@ -29,3 +29,6 @@ __pycache__/
 eda.ipynb
 .DS_Store
 .env
+
+# Pipeline run logs
+logs/

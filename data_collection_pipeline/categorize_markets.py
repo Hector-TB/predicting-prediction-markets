@@ -21,6 +21,7 @@ Run after fetch_markets.py and build_snapshots.py.
 
 import anthropic
 import pandas as pd
+from dotenv import load_dotenv
 import json
 import time
 from pathlib import Path
@@ -32,6 +33,8 @@ from typing import Optional
 
 ROOT        = Path(__file__).resolve().parent.parent
 DATA_DIR    = ROOT / "data"
+
+load_dotenv(ROOT / ".env")  # ANTHROPIC_API_KEY
 
 # ─────────────────────────────────────────────
 # CONFIG
@@ -68,9 +71,30 @@ SYSTEM_PROMPT = """You are a classification assistant. You will be given a list 
 - entertainment: Celebrity, TV shows, music, film, awards, pop culture, social media
 - other: Anything that doesn't clearly fit the above
 
-You will receive a JSON array of question strings.
-Respond with ONLY a JSON array of category strings, in the same order.
-No preamble, no explanation, no markdown — just the raw JSON array."""
+You will receive a JSON array of objects, each with an integer "id" and a "question".
+Return exactly one result per input object, echoing its "id"."""
+
+# Structured output: every answer is keyed by the input's id and the category is
+# constrained to VALID_CATEGORIES, so answers can't shift onto the wrong question.
+OUTPUT_SCHEMA = {
+    "type": "object",
+    "properties": {
+        "results": {
+            "type": "array",
+            "items": {
+                "type": "object",
+                "properties": {
+                    "id":       {"type": "integer"},
+                    "category": {"type": "string", "enum": sorted(VALID_CATEGORIES)},
+                },
+                "required": ["id", "category"],
+                "additionalProperties": False,
+            },
+        },
+    },
+    "required": ["results"],
+    "additionalProperties": False,
+}
 
 
 # ─────────────────────────────────────────────
@@ -78,41 +102,35 @@ No preamble, no explanation, no markdown — just the raw JSON array."""
 # ─────────────────────────────────────────────
 
 def classify_batch(client: anthropic.Anthropic,
-                   batch: list[dict]) -> Optional[list[str]]:
+                   batch: list[dict]) -> Optional[list[Optional[str]]]:
     """
     Send a batch of questions to Claude.
-    Returns a list of category strings in the same order as batch.
+    Returns a list aligned with batch: a category per question, or None for any
+    question the response didn't cover. Returns None if the whole batch failed.
     """
-    payload = json.dumps([m["question"] for m in batch])
+    payload = json.dumps([{"id": i, "question": m["question"]} for i, m in enumerate(batch)])
 
     for attempt in range(1, MAX_RETRIES + 1):
         try:
             message = client.messages.create(
                 model="claude-haiku-4-5",
-                max_tokens=4096,
+                max_tokens=8192,
                 system=[{
                     "type": "text",
                     "text": SYSTEM_PROMPT,
                     "cache_control": {"type": "ephemeral"},
                 }],
                 messages=[{"role": "user", "content": payload}],
+                output_config={"format": {"type": "json_schema", "schema": OUTPUT_SCHEMA}},
             )
-            raw = message.content[0].text.strip()
-
-            # Strip markdown fences if present
-            if raw.startswith("```"):
-                raw = raw.split("\n", 1)[1].rsplit("```", 1)[0].strip()
-
-            results = json.loads(raw)
-            cats = [
-                r.strip().lower() if r.strip().lower() in VALID_CATEGORIES else "other"
-                for r in results
-            ]
-            # Truncate if too long, pad with "other" if too short
-            if len(cats) != len(batch):
-                print(f"(count mismatch: got {len(cats)}, expected {len(batch)} — adjusting) ",
-                      end="")
-                cats = (cats + ["other"] * len(batch))[:len(batch)]
+            if message.stop_reason != "end_turn":
+                raise ValueError(f"stop_reason={message.stop_reason}")
+            text = next(b.text for b in message.content if b.type == "text")
+            by_id = {r["id"]: r["category"] for r in json.loads(text)["results"]}
+            cats = [by_id.get(i) for i in range(len(batch))]
+            n_missing = sum(c is None for c in cats)
+            if n_missing:
+                print(f"({n_missing} missing — left for next run) ", end="")
             return cats
 
         except Exception as e:
@@ -143,12 +161,10 @@ def main():
     print(f"Loaded {len(meta):,} markets from {META_CSV}")
 
     # ── Find uncategorised markets ─────────────
-    # Only re-classify rows where category is missing or "other"
-    needs_category = meta[
-        meta["category"].isna() |
-        (meta["category"].str.strip().str.lower() == "other") |
-        (meta["category"].str.strip() == "")
-    ].copy()
+    # Re-classify rows that are missing, "other", or a legacy Gamma label
+    # outside VALID_CATEGORIES (e.g. "US-current-affairs")
+    cat = meta["category"].fillna("").astype(str).str.strip().str.lower()
+    needs_category = meta[~cat.isin(VALID_CATEGORIES) | (cat == "other")].copy()
 
     already_done = len(meta) - len(needs_category)
     print(f"  Already categorised: {already_done:,}")
@@ -166,7 +182,7 @@ def main():
         ]
 
         n_batches    = (len(records) + BATCH_SIZE - 1) // BATCH_SIZE
-        all_categories = ["other"] * len(records)  # positional, same order as records
+        all_categories = [None] * len(records)  # positional; None = batch failed, retried next run
 
         print(f"\nClassifying in {n_batches} batches of {BATCH_SIZE}...\n")
 
@@ -181,20 +197,19 @@ def main():
 
             if categories:
                 all_categories[start : start + len(batch)] = categories
-                print(f"ok — {len(categories)} classified")
+                print(f"ok — {sum(c is not None for c in categories)} classified")
             else:
-                print("failed — assigned 'other'")
+                print("failed — left uncategorised for next run")
 
             time.sleep(SLEEP_BETWEEN_CALLS)
 
         # ── Apply to meta ──────────────────────
-        id_to_category = {r["id"]: cat for r, cat in zip(records, all_categories)}
-        meta["category"] = meta.apply(
-            lambda row: id_to_category.get(str(row["market_id"]), row["category"])
-            if pd.isna(row["category"]) or str(row["category"]).strip().lower() in ("other", "")
-            else row["category"],
-            axis=1
-        )
+        id_to_category = {r["id"]: c for r, c in zip(records, all_categories) if c is not None}
+        new_cat = meta["market_id"].astype(str).map(id_to_category)
+        meta["category"] = new_cat.fillna(meta["category"])
+        n_failed = sum(c is None for c in all_categories)
+        if n_failed:
+            print(f"\n  WARNING: {n_failed:,} markets in failed batches kept their old category")
 
     # ── Print category distribution ───────────
     print(f"\nCategory distribution:")
