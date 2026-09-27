@@ -11,8 +11,11 @@ Applies three data quality fixes in place:
 Run after build_snapshots.py, before training any models.
 """
 
+import logging
 import pandas as pd
 from pathlib import Path
+
+log = logging.getLogger(__name__)
 
 ROOT        = Path(__file__).resolve().parent.parent
 DATA_DIR    = ROOT / "data"
@@ -126,6 +129,19 @@ def main():
         existing_pq = existing_pq[~existing_pq["market_id"].isin(set(df["market_id"]))].copy()
         df = pd.concat([existing_pq, df], ignore_index=True)
         print(f"  Merged total: {len(df):,} rows")
+
+    # The meta CSV is the source of truth for the split. Snapshot rows get their
+    # label when first built, so re-stamp after a split recompute (ADR-013).
+    split_by_market = meta.set_index("market_id")["split"]
+    new_split = df["market_id"].map(split_by_market)
+    n_missing = int(new_split.isna().sum())
+    if n_missing:
+        log.warning("  %s snapshot rows have no market in meta — keeping their old split", f"{n_missing:,}")
+        new_split = new_split.fillna(df["split"])
+    n_changed = int((new_split != df["split"]).sum())
+    df["split"] = new_split
+    log.info("  Split re-stamped from meta: %s rows changed", f"{n_changed:,}")
+
     print(f"  Writing dataset parquet...")
     df.to_parquet(parquet_path, index=False)
     print(f"  Saved {parquet_path}  ({len(df):,} rows)")
@@ -140,4 +156,5 @@ def main():
 
 
 if __name__ == "__main__":
+    logging.basicConfig(level=logging.INFO, format="%(message)s")
     main()

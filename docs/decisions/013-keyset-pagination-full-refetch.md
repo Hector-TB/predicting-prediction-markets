@@ -24,6 +24,7 @@ A spot check of 2025-03-01 → 2025-03-15 with keyset pagination found 386 marke
 3. Parse and filter each window as it arrives (raw short-duration markets are discarded immediately; the full raw corpus would not fit comfortably in memory).
 4. Add `fetch_markets.py --full`: re-fetch everything from `START_DATE_MIN`, checkpointing each completed window to `data/fetch_cache/`, then merge with the existing meta CSV (existing rows win, so LLM categories and prior values are preserved; markets no longer returned by the API are kept).
 5. After the full re-fetch, recompute the 80/20 temporal split on the full corpus with `scripts/recompute_split.py` (ADR-001 method unchanged; only the cutoff moves).
+6. The meta CSV is the single source of truth for `split`. `fix_dataset.py` re-stamps every snapshot row's `split` from meta when writing the parquet, because `build_snapshots.py` only labels rows when they are first built and existing rows would otherwise keep the old assignment.
 
 ## Rationale
 
