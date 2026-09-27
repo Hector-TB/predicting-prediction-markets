@@ -155,7 +155,7 @@ The README previously quoted a 0.964 AUC baseline. That number came from the unf
 
 ## Dataset
 
-> The figures in this section describe the course-era dataset (20,948 markets). The ADR-013 full re-fetch expanded the market list to 45,143 markets, and the snapshot dataset is being rebuilt from it; the counts below will be updated once the rebuild finishes.
+> The figures in this section describe the v1 dataset (20,948 markets). The ADR-013 full re-fetch expanded the market list to 45,143 markets, and the snapshot dataset is being rebuilt from it; the counts below will be updated once the rebuild finishes.
 
 ### Canonical files (on S3 — fetch with `python data/sync.py pull`)
 

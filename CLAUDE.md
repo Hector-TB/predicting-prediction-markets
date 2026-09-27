@@ -18,10 +18,12 @@ The course paper (research questions, methods, reported results) is `docs/paper/
 
 ## Current state (as of 2026-09-27)
 
+Dataset versions: **v1** = the course-project dataset the paper used (20,948 markets, still on S3); **v2** = the ADR-013/014 rebuild (45,143 markets fetched, in progress).
+
 - Phase: productionization — rebuilding the dataset, then retraining and re-scoring the paper's results
-- Data: the ADR-013 full re-fetch grew the market list to 45,143 (all LLM-categorised); `build_snapshots.py` is rebuilding snapshots for the ~20k new markets. After it: `run_pipeline.py --skip-markets --skip-snapshots`, then `python data/sync.py push`. The parquet files on S3 are still the course-era dataset (20,948 markets)
+- Data: the ADR-013 full re-fetch grew the market list to 45,143 (all LLM-categorised); `build_snapshots.py` is rebuilding snapshots for the ~20k new markets. After it: `run_pipeline.py --skip-markets --skip-snapshots`, then `python data/sync.py push`. The parquet files on S3 are still the v1 dataset (20,948 markets)
 - Pipeline steps stream in batches (`data_collection_pipeline/stream_parquet.py`), so they fit in 8 GB of RAM
-- Models: LR, XGBoost (`--trends` for the Trends variant), RF, RF + Trends, SVM — all still trained on course-era data; retrain after the rebuild, then `python analysis/rescore_paper.py`
+- Models: LR, XGBoost (`--trends` for the Trends variant), RF, RF + Trends, SVM — all still trained on the v1 dataset; retrain after the rebuild, then `python analysis/rescore_paper.py`
 - Course paper results: RQ1 gains reproduce and are significant with market-level CIs; the paper's trading ROI is overstated (ADR-015, `docs/paper/README.md`)
 - Database: Supabase (free tier); schema in `db/migrations/001_initial_schema.sql`; 20,948 markets + 9 model_runs loaded (not yet refreshed)
 - Work in progress is on branch `pipeline-leakage-and-categories`

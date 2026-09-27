@@ -54,7 +54,7 @@ Run `/evaluate` to see the updated metrics table, then re-score the paper's comp
 (same test rows, market-level CIs, corrected trading ROI — ADR-015):
 
 ```bash
-python3 analysis/rescore_paper.py --out docs/paper/rescore_rebuilt_data.md
+python3 analysis/rescore_paper.py --out docs/paper/rescore_v2_data.md
 ```
 
 ## 6. Push updated predictions to S3

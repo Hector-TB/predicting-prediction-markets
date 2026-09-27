@@ -46,7 +46,7 @@ The project's central question (RQ1) is whether models beat the market price. Re
 
 ## Consequences
 
-- **Validated on the course-era data:** `rescore_paper.py` reproduces the paper's RQ1 table, duration breakdown and trade counts exactly, and its lifecycle figure closely with snapshot-order thirds (Near RF 0.939 vs the paper's 0.937) ([`docs/paper/rescore_course_data.md`](../paper/rescore_course_data.md)).
+- **Validated on the v1 dataset:** `rescore_paper.py` reproduces the paper's RQ1 table, duration breakdown and trade counts exactly, and its lifecycle figure closely with snapshot-order thirds (Near RF 0.939 vs the paper's 0.937) ([`docs/paper/rescore_v1_data.md`](../paper/rescore_v1_data.md)).
 - **RQ1 holds with honest CIs on that data:** every tree model's ΔAUC CI excludes zero (e.g. RF + Trends +0.0143 [+0.0054, +0.0231]); LR's does not.
 - **The paper's trading ROI claims (27.5%, 48% at day 11) are overstated** and should not be quoted. Corrected: 12.7% per snapshot, 11.2% one per market, vs 7.3% / 5.7% for always-buy-NO.
 - All results must be re-measured on the ADR-013/014 dataset; this ADR fixes how, not what the numbers will be.

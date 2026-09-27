@@ -11,8 +11,8 @@
 
 ## Reproduction check (2026-09-27)
 
-`analysis/rescore_paper.py` run on the course-era data reproduces the paper's RQ1 table, duration breakdown and trade counts/profit exactly ([`rescore_course_data.md`](rescore_course_data.md)). New findings:
+`analysis/rescore_paper.py` run on the v1 dataset reproduces the paper's RQ1 table, duration breakdown and trade counts/profit exactly ([`rescore_v1_data.md`](rescore_v1_data.md)). New findings:
 
 - **The RQ1 gains are significant.** Market-clustered bootstrap 95% CIs on ΔAUC exclude zero for every tree model (RF + Trends +0.0143 [+0.0054, +0.0231]). LR's include zero.
 - **The paper's ROI figures are overstated.** `analysis/trading_simulation.ipynb` counts capital as the market price for every trade, including NO bets, which actually cost 1 − price. With the correct cost, GB + Trends earns **12.7%** ROI per snapshot (paper: 27.5%) and **11.2%** with one trade per market. That's still above always-buy-NO (7.3% / 5.7%). The horizon sweep ("48% at day 11") uses the same formula.
-- **The lifecycle figure (RQ3) used thirds of each market's snapshots by order** (`analysis.ipynb` cell 21), not `pct_lifetime_elapsed` as §5.3's text says. With snapshot-order thirds the script reproduces the figure closely (Far: trees +0.017 to +0.020 over the market; Near RF 0.939 vs the paper's 0.937). With `pct_lifetime_elapsed` the numbers differ (Near RF 0.903). `rescore_course_data.md` predates this and shows only the `pct_lifetime_elapsed` version.
+- **The lifecycle figure (RQ3) used thirds of each market's snapshots by order** (`analysis.ipynb` cell 21), not `pct_lifetime_elapsed` as §5.3's text says. With snapshot-order thirds the script reproduces the figure closely (Far: trees +0.017 to +0.020 over the market; Near RF 0.939 vs the paper's 0.937). With `pct_lifetime_elapsed` the numbers differ (Near RF 0.903). `rescore_v1_data.md` predates this and shows only the `pct_lifetime_elapsed` version.

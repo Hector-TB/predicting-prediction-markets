@@ -49,7 +49,7 @@ LR_DIR = MODELS_DIR / "logistic_regression/predictions"
 GB_DIR = MODELS_DIR / "gradient_boosting/predictions"
 
 # label → sources tried in order: (prediction CSV, candidate probability columns).
-# The course-era LR/GB files put base + trends in one predictions.csv; the current
+# The v1 LR/GB files put base + trends in one predictions.csv; the current
 # train.py writes predictions.csv and (with --trends) predictions_trends.csv.
 MODELS = [
     ("LR",          [(LR_DIR / "predictions.csv", ["pred_prob", "pred_prob_base"])]),

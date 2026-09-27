@@ -27,7 +27,7 @@ Both follow the gradient_boosting pattern: combined sample weights, 5-fold CV, i
 ### 4. Retrain all models on latest data and re-score the paper
 After the pipeline refresh (step 2) is confirmed clean:
 - Train LR and XGBoost with and without `--trends`, RF and RF + Trends (`/sync-and-train`)
-- Run `python analysis/rescore_paper.py --out docs/paper/rescore_rebuilt_data.md` — does the
+- Run `python analysis/rescore_paper.py --out docs/paper/rescore_v2_data.md` — does the
   paper's RQ1 gain survive ADR-014? (evaluation rules: ADR-015)
 - Run `/evaluate` and compare new vs old metrics
 - Push updated predictions to S3; refresh the DB (`python db/load_parquet.py`)

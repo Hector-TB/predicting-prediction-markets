@@ -1,4 +1,4 @@
-<!-- Generated 2026-09-27 by analysis/rescore_paper.py on the course-era data (old polymarket_ml_dataset_clean.parquet + course prediction files), to validate the script against the paper. -->
+<!-- Generated 2026-09-27 by analysis/rescore_paper.py on the v1 dataset (v1 polymarket_ml_dataset_clean.parquet + v1 prediction files), to validate the script against the paper. -->
 
 # Paper re-score — polymarket_ml_dataset_clean.parquet
 
