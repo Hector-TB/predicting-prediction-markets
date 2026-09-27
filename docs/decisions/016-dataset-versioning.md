@@ -46,7 +46,7 @@ Checking S3 before freezing it (2026-09-27) showed why a version needs more than
 - **Date-named versions (e.g. `2026-09-27`)** — dates don't say what changed, and two builds on one day would collide. The fetch date is in the manifest instead.
 - **DVC** — links each commit to data versions automatically, but adds a tool and a workflow for a one-person project; can be revisited if collaboration grows.
 - **Delta Lake / Iceberg / lakeFS** — time travel and branching over tables; overkill for a handful of parquet files.
-- **S3 bucket versioning alone** — protects against accidental overwrites but gives no names, descriptions or checksums. Worth enabling as an extra safety net; not a substitute.
+- **S3 bucket versioning alone** — protects against accidental overwrites but gives no names, descriptions or checksums. Enabled on 2026-09-27 as an extra safety net (it can be suspended but not removed; old object versions add a little storage cost); not a substitute.
 
 ## Assumptions
 
