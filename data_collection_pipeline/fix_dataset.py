@@ -130,6 +130,10 @@ def main():
         df = pd.concat([existing_pq, df], ignore_index=True)
         print(f"  Merged total: {len(df):,} rows")
 
+    # Older parquet rows store snapshot_timestamp as strings; CSV rows parse to
+    # Timestamps. A mixed object column fails the Arrow write, so normalise.
+    df["snapshot_timestamp"] = pd.to_datetime(df["snapshot_timestamp"], format="mixed", utc=True)
+
     # The meta CSV is the source of truth for the split. Snapshot rows get their
     # label when first built, so re-stamp after a split recompute (ADR-013).
     split_by_market = meta.set_index("market_id")["split"]
