@@ -1,18 +1,20 @@
 """
 fix_leakage.py
 ==============
-Fetches closedTime for every market in polymarket_markets_meta.csv,
-then removes post-resolution snapshots from all parquet files.
+Fetches closedTime for every market in the snapshot parquet, then removes
+post-resolution and already-settled snapshots from all parquet files (ADR-005, ADR-014).
 
 SAFETY: originals are NEVER modified. All output goes to *_clean.parquet files.
 
-Uses paginated batch fetching (~50 calls) instead of one call per market,
-so the API step takes ~30 seconds rather than ~1 hour.
+closedTime is looked up by conditionId in batches of 100 (~450 calls for 45k
+markets) and cached in market_closed_times.csv; later runs only fetch markets
+missing from the cache.
 
 Run from the project root:
     python data_collection_pipeline/fix_leakage.py
 """
 
+import logging
 import pathlib
 import time
 import requests
@@ -40,101 +42,75 @@ PARQUET_TRENDS_CLEAN    = DATA_DIR / "polymarket_ml_dataset_with_trends_clean.pa
 # ─────────────────────────────────────────────
 
 GAMMA_URL           = "https://gamma-api.polymarket.com"
-BATCH_SIZE          = 500
+BATCH_SIZE          = 100       # condition_ids per request (Gamma page cap)
 SLEEP_BETWEEN_CALLS = 0.15
-MAX_RETRIES         = 3
+MAX_RETRIES         = 8         # Gamma has multi-minute 500 outages (ADR-013)
+RETRY_BACKOFF       = 5         # seconds before first retry (doubles each attempt)
+RETRY_BACKOFF_MAX   = 60
+
+log = logging.getLogger(__name__)
 
 
 # ─────────────────────────────────────────────
 # STEP 1 — FETCH closedTime VIA PAGINATION
 # ─────────────────────────────────────────────
 
-def fetch_closed_times(market_ids: list[str]) -> pd.DataFrame:
+def _fetch_closed_batch(ids: list[str]) -> dict[str, str | None]:
+    """Look up closedTime for up to BATCH_SIZE conditionIds.
+
+    `closed=true` is required: without it Gamma returns nothing for resolved markets.
+    Raises RuntimeError after MAX_RETRIES so a gap is never silently cached (ADR-013).
     """
-    Sweep the Gamma API using the same paginated batch endpoint used by
-    fetch_markets.py (500 markets per call).  Extracts conditionId →
-    closedTime for every market that appears in market_ids.
-
-    Returns DataFrame with columns [market_id, closed_time].
-    """
-    target_ids = set(market_ids)
-    found: dict[str, str | None] = {}
-
-    offset               = 0
-    total_calls          = 0
-    offset_attempts      = 0   # retry counter for the current offset
-    consecutive_skips    = 0
-    MAX_OFFSET_ATTEMPTS  = 5
-    MAX_CONSECUTIVE_SKIP = 3
-
-    print(f"  Sweeping Gamma API in batches of {BATCH_SIZE}...")
-
-    while len(found) < len(target_ids):
-        batch = None
+    for attempt in range(1, MAX_RETRIES + 1):
         try:
             r = requests.get(
                 f"{GAMMA_URL}/markets",
-                params={
-                    "closed":    "true",
-                    "limit":     BATCH_SIZE,
-                    "offset":    offset,
-                    "order":     "startDate",
-                    "ascending": "true",
-                },
-                timeout=20,
+                params={"condition_ids": ids, "closed": "true", "limit": BATCH_SIZE},
+                timeout=30,
             )
             r.raise_for_status()
-            batch = r.json()
+            return {m["conditionId"]: m.get("closedTime") for m in r.json() if m.get("conditionId")}
         except Exception as e:
-            offset_attempts += 1
-            wait = 2 ** offset_attempts
-            if offset_attempts < MAX_OFFSET_ATTEMPTS:
-                print(f"  Attempt {offset_attempts}/{MAX_OFFSET_ATTEMPTS} failed "
-                      f"at offset {offset}: {e} — retrying in {wait}s")
-                time.sleep(wait)
-                continue  # retry same offset
-            else:
-                # Exhausted retries for this offset — skip it
-                print(f"  Giving up on offset {offset} after {MAX_OFFSET_ATTEMPTS} attempts — skipping.")
-                offset          += BATCH_SIZE
-                offset_attempts  = 0
-                consecutive_skips += 1
-                if consecutive_skips >= MAX_CONSECUTIVE_SKIP:
-                    print(f"  {MAX_CONSECUTIVE_SKIP} consecutive skips — stopping sweep.")
-                    break
-                continue
+            if attempt == MAX_RETRIES:
+                raise RuntimeError(f"Gamma closedTime lookup failed {MAX_RETRIES}x: {e}") from e
+            wait = min(RETRY_BACKOFF * (2 ** (attempt - 1)), RETRY_BACKOFF_MAX)
+            log.warning("  closedTime batch attempt %d/%d: %s — retry in %ds",
+                        attempt, MAX_RETRIES, e, wait)
+            time.sleep(wait)
 
-        # Success
-        offset_attempts   = 0
-        consecutive_skips = 0
 
-        for m in batch:
-            cid = m.get("conditionId")
-            if cid and cid in target_ids:
-                found[cid] = m.get("closedTime")  # may be None
+def fetch_closed_times(market_ids: list[str]) -> pd.DataFrame:
+    """
+    Return [market_id, closed_time] for every id in market_ids.
 
-        total_calls += 1
-        print(f"  offset {offset:>6}  |  batch {len(batch):>4}  "
-              f"|  matched {len(found):>5} / {len(target_ids):,}")
+    Markets already in CLOSED_TIMES_CSV with a populated closed_time are reused;
+    the rest are looked up by conditionId in batches. Markets Gamma does not
+    return keep closed_time = None and are retried on the next run.
+    """
+    cached: dict[str, str] = {}
+    if CLOSED_TIMES_CSV.exists():
+        prev = pd.read_csv(CLOSED_TIMES_CSV).dropna(subset=["closed_time"])
+        cached = dict(zip(prev["market_id"], prev["closed_time"]))
 
-        if len(batch) < BATCH_SIZE:
-            break  # last page
+    todo = [mid for mid in market_ids if mid not in cached]
+    log.info("  closedTime cache: %s cached, %s to fetch", f"{len(cached):,}", f"{len(todo):,}")
 
-        offset += BATCH_SIZE
+    fetched: dict[str, str | None] = {}
+    for i in range(0, len(todo), BATCH_SIZE):
+        fetched.update(_fetch_closed_batch(todo[i:i + BATCH_SIZE]))
+        done = min(i + BATCH_SIZE, len(todo))
+        if (i // BATCH_SIZE) % 50 == 0 or done == len(todo):
+            log.info("    %s / %s looked up", f"{done:,}", f"{len(todo):,}")
         time.sleep(SLEEP_BETWEEN_CALLS)
 
-    # Any market not seen in the sweep gets None
-    for mid in target_ids:
-        if mid not in found:
-            found[mid] = None
-
     rows = [
-        {"market_id": mid, "closed_time": pd.to_datetime(ct, utc=True) if ct else None}
-        for mid, ct in found.items()
+        {"market_id": mid, "closed_time": cached.get(mid) or fetched.get(mid)}
+        for mid in market_ids
     ]
     result = pd.DataFrame(rows)
+    result["closed_time"] = pd.to_datetime(result["closed_time"], utc=True, format="mixed", errors="coerce")
     result.to_csv(CLOSED_TIMES_CSV, index=False)
-    print(f"\n  API calls made: {total_calls}  |  Saved to {CLOSED_TIMES_CSV.name}")
+    log.info("  Saved %s", CLOSED_TIMES_CSV.name)
     return result
 
 
@@ -143,66 +119,78 @@ def fetch_closed_times(market_ids: list[str]) -> pd.DataFrame:
 # ─────────────────────────────────────────────
 
 PRICE_THRESHOLD  = 0.95                                                          # settled if price >= 0.95 or <= 0.05
-INACTIVITY_DAYS  = 14                                                            # keep N days after settlement/last change
+INACTIVITY_DAYS  = 14                                                            # keep N days after last price change
 HARD_CUTOFF      = (pd.Timestamp.now(tz="UTC") + pd.Timedelta(days=1)).normalize()  # tomorrow midnight — includes today
 
 
-def price_based_cutoffs(df: pd.DataFrame) -> pd.Series:
+def inactivity_cutoffs(df: pd.DataFrame) -> pd.Series:
     """
-    Derive a per-market cutoff from price history for ALL markets.
-
-    Pass A — threshold: find the first snapshot where price >= 0.95 or <= 0.05.
-              cutoff = that timestamp + INACTIVITY_DAYS.
-
-    Pass B — inactivity: for markets where price never crossed the threshold,
-              find the last snapshot where the price changed by > 0.001.
-              cutoff = that timestamp + INACTIVITY_DAYS.
-
-    Returns a Series indexed by market_id. Markets with no detectable change
-    fall back to HARD_CUTOFF.
+    Per-market cutoff = last snapshot where the price changed by > 0.001,
+    plus INACTIVITY_DAYS. Markets with no detectable change fall back to
+    HARD_CUTOFF. Returns a Series indexed by market_id.
     """
     sub = df.sort_values(["market_id", "snapshot_timestamp"])
+    prev = sub.groupby("market_id")["price_at_snapshot"].shift(1)
+    changed = (sub["price_at_snapshot"] - prev.fillna(sub["price_at_snapshot"])).abs() > 0.001
+    last_change = sub[changed].groupby("market_id")["snapshot_timestamp"].max()
 
-    # Pass A: first extreme price
-    extreme = (sub["price_at_snapshot"] >= PRICE_THRESHOLD) | \
-              (sub["price_at_snapshot"] <= 1 - PRICE_THRESHOLD)
-    first_extreme = (
-        sub[extreme]
-        .groupby("market_id")["snapshot_timestamp"]
-        .min()
-        .rename("first_extreme_ts")
-    )
-
-    # Pass B: last price change
-    sub["prev_price"] = sub.groupby("market_id")["price_at_snapshot"].shift(1)
-    sub["changed"] = (
-        (sub["price_at_snapshot"] - sub["prev_price"].fillna(sub["price_at_snapshot"]))
-        .abs() > 0.001
-    )
-    last_change = (
-        sub[sub["changed"]]
-        .groupby("market_id")["snapshot_timestamp"]
-        .max()
-        .rename("last_change_ts")
-    )
-
-    cutoffs = (
-        pd.DataFrame({"market_id": sub["market_id"].unique()})
-        .set_index("market_id")
-        .join(first_extreme)
-        .join(last_change)
-    )
-
-    # Prefer first_extreme; fall back to last_change; fall back to HARD_CUTOFF
-    cutoffs["cutoff"] = (
-        cutoffs["first_extreme_ts"]
-        .fillna(cutoffs["last_change_ts"])
+    cutoff = (
+        last_change.reindex(pd.Index(sub["market_id"].unique(), name="market_id"))
         .fillna(HARD_CUTOFF)
-    ) + pd.Timedelta(days=INACTIVITY_DAYS)
+        + pd.Timedelta(days=INACTIVITY_DAYS)
+    )
+    return cutoff.clip(upper=HARD_CUTOFF)
 
-    cutoffs["cutoff"] = cutoffs["cutoff"].clip(upper=HARD_CUTOFF)
 
-    return cutoffs["cutoff"]
+def filter_snapshots(df: pd.DataFrame, closed_times: pd.DataFrame) -> tuple[pd.DataFrame, dict]:
+    """
+    Four-pass leakage filter (ADR-005, revised by ADR-014). Returns (clean_df, removed_counts).
+
+      Pass 1 — closedTime:  drop rows after the API-reported close.
+      Pass 2 — settled:     drop rows whose own price is >= 0.95 or <= 0.05. Decided per
+                            row from the snapshot price alone, so no future information
+                            selects which rows survive and live scoring can apply the
+                            same rule.
+      Pass 3 — inactivity:  markets WITHOUT a closedTime only — drop rows more than
+                            INACTIVITY_DAYS after the last price change.
+      Pass 4 — hard cap:    drop rows after HARD_CUTOFF (tomorrow midnight UTC).
+    """
+    df = df.copy()
+    df["snapshot_timestamp"] = pd.to_datetime(df["snapshot_timestamp"], format="mixed", utc=True)
+
+    ct = closed_times[["market_id", "closed_time"]].copy()
+    ct["closed_time"] = pd.to_datetime(ct["closed_time"], utc=True, format="mixed", errors="coerce")
+    df = df.merge(ct.dropna(subset=["closed_time"]), on="market_id", how="left")
+    removed = {}
+
+    # ── Pass 1: closedTime ────────────────────────────────
+    keep = df["closed_time"].isna() | (df["snapshot_timestamp"] <= df["closed_time"])
+    removed["closedTime"] = int((~keep).sum())
+    df = df.loc[keep]
+
+    # ── Pass 2: settled price at the snapshot itself ──────
+    settled = (df["price_at_snapshot"] >= PRICE_THRESHOLD) | \
+              (df["price_at_snapshot"] <= 1 - PRICE_THRESHOLD)
+    removed["settled price"] = int(settled.sum())
+    df = df.loc[~settled]
+
+    # ── Pass 3: inactivity, only where closedTime is unknown ─
+    no_ct = df["closed_time"].isna()
+    if no_ct.any():
+        cutoffs = inactivity_cutoffs(df.loc[no_ct]).rename("inactive_cutoff")
+        df = df.merge(cutoffs.reset_index(), on="market_id", how="left")
+        keep = df["inactive_cutoff"].isna() | (df["snapshot_timestamp"] <= df["inactive_cutoff"])
+        df = df.loc[keep].drop(columns=["inactive_cutoff"])
+        removed["inactivity"] = int((~keep).sum())
+    else:
+        removed["inactivity"] = 0
+
+    # ── Pass 4: hard cap ──────────────────────────────────
+    keep = df["snapshot_timestamp"] <= HARD_CUTOFF
+    removed["hard cap"] = int((~keep).sum())
+    df = df.loc[keep].drop(columns=["closed_time"]).reset_index(drop=True)
+
+    return df, removed
 
 
 def filter_parquet(
@@ -210,53 +198,18 @@ def filter_parquet(
     output_path: pathlib.Path,
     closed_times: pd.DataFrame,
 ) -> None:
-    """
-    Three-pass filter (writes to output_path — input_path is never modified):
-
-      Pass 1 — closedTime:  drop rows after API-reported close for markets that have one.
-      Pass 2 — price/inact: drop rows more than 14 days after the price first crossed
-                            0.95/0.05 (or after the last price change). Applied to ALL
-                            markets so that even closedTime markets don't keep months of
-                            stale prices.
-      Pass 3 — hard cap:    drop any remaining rows after 2026-05-01.
-    """
+    """Apply filter_snapshots to input_path and write output_path (input is never modified)."""
     print(f"\n  Reading {input_path.name} ...")
     df = pd.read_parquet(input_path)
     original_rows = len(df)
     print(f"  Rows before: {original_rows:,}")
+    print(f"  Markets with closedTime: {closed_times['closed_time'].notna().sum():,} / {len(closed_times):,}")
 
-    df["snapshot_timestamp"] = pd.to_datetime(
-        df["snapshot_timestamp"], format="mixed", utc=True
-    )
-
-    # ── Pass 1: closedTime ────────────────────────────────
-    ct = closed_times.copy()
-    ct["closed_time"] = pd.to_datetime(ct["closed_time"], utc=True, errors="coerce")
-    populated = ct.dropna(subset=["closed_time"])
-    print(f"  Markets with closedTime: {len(populated):,} / {len(ct):,}")
-
-    df = df.merge(populated[["market_id", "closed_time"]], on="market_id", how="left")
-    mask1    = df["closed_time"].isna() | (df["snapshot_timestamp"] <= df["closed_time"])
-    removed1 = (~mask1).sum()
-    df = df.loc[mask1].drop(columns=["closed_time"]).copy()
-
-    # ── Pass 2: price-based cutoff for ALL markets ────────
-    print(f"  Computing price-based cutoffs for {df['market_id'].nunique():,} markets...")
-    cutoffs  = price_based_cutoffs(df)
-    df       = df.merge(cutoffs.rename("price_cutoff").reset_index(), on="market_id", how="left")
-    mask2    = df["snapshot_timestamp"] <= df["price_cutoff"]
-    removed2 = (~mask2).sum()
-    df       = df.loc[mask2].drop(columns=["price_cutoff"]).copy()
-
-    # ── Pass 3: hard cap ─────────────────────────────────────
-    mask3    = df["snapshot_timestamp"] <= HARD_CUTOFF
-    removed3 = (~mask3).sum()
-    df_clean = df.loc[mask3].copy()
+    df_clean, removed = filter_snapshots(df, closed_times)
 
     total_removed = original_rows - len(df_clean)
-    print(f"  Removed — closedTime:  {removed1:,}")
-    print(f"  Removed — price/inact: {removed2:,}")
-    print(f"  Removed — hard cap:    {removed3:,}")
+    for name, n in removed.items():
+        print(f"  Removed — {name + ':':<15} {n:,}")
     print(f"  Total removed:         {total_removed:,} ({total_removed/original_rows:.2%})")
     print(f"  Rows after:            {len(df_clean):,}")
     print(f"  Max snapshot:          {df_clean['snapshot_timestamp'].max()}")
@@ -289,17 +242,13 @@ def main():
     print("STEP 1 — Fetch closedTime from Gamma API")
     print("=" * 60)
 
-    if CLOSED_TIMES_CSV.exists():
-        print(f"  Cache found — loading {CLOSED_TIMES_CSV.name}  (delete file to re-fetch)")
-        closed_times = pd.read_csv(CLOSED_TIMES_CSV)
-    else:
-        # Read market IDs from the parquet so we cover all markets, not just the meta CSV
-        market_ids = (
-            pd.read_parquet(PARQUET_MAIN, columns=["market_id"])["market_id"]
-            .unique().tolist()
-        )
-        print(f"  Markets in parquet: {len(market_ids):,}")
-        closed_times = fetch_closed_times(market_ids)
+    # Read market IDs from the parquet so we cover all markets, not just the meta CSV
+    market_ids = (
+        pd.read_parquet(PARQUET_MAIN, columns=["market_id"])["market_id"]
+        .unique().tolist()
+    )
+    print(f"  Markets in parquet: {len(market_ids):,}")
+    closed_times = fetch_closed_times(market_ids)
 
     populated = closed_times["closed_time"].notna().sum()
     print(f"\n  closedTime summary:")
@@ -329,4 +278,5 @@ def main():
 
 
 if __name__ == "__main__":
+    logging.basicConfig(level=logging.INFO, format="%(message)s")
     main()

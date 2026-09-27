@@ -1,7 +1,7 @@
 # ADR-005: Leakage Fix — Removing Post-Resolution Snapshots
 
 **Date:** 2026-09-18  
-**Status:** Accepted  
+**Status:** Accepted — Pass 1 and Pass 2 revised by ADR-014  
 **Deciders:** Dhairya Dhamani, Hector Thompson Baroni, Sachin Sastri  
 **Code location:** `data_collection_pipeline/fix_leakage.py`
 
@@ -21,7 +21,7 @@ Three-pass filter applied in `fix_leakage.py`, producing `_clean.parquet` files 
 
 **Pass 2 — Price-based cutoff (all markets):** Find the first snapshot where `price_at_snapshot >= 0.95` or `<= 0.05`. Keep only snapshots up to that timestamp + 14 days (inactivity grace period). For markets where the price never crosses the threshold, use the last snapshot where the price changed by > 0.001 + 14 days.
 
-**Pass 3 — Hard cap:** Drop any snapshots after 2026-05-01 (absolute ceiling to prevent future-dated data errors).
+**Pass 3 — Hard cap:** Drop any snapshots after tomorrow midnight UTC, computed at run time (ceiling against future-dated data errors). *Corrected 2026-09-27: this ADR originally said 2026-05-01, but the code has used a run-time date since incremental fetching was added.*
 
 Originals are never modified. Output: `polymarket_ml_dataset_clean.parquet` (1,448,142 rows — ~65% of the original 4.1M).
 
@@ -41,7 +41,7 @@ The `closedTime` pass handles markets where the API knows the exact resolution m
 
 1. A price above 0.95 or below 0.05 is a strong signal of effective resolution
 2. The 14-day grace period is sufficient to include the final genuine trading activity without keeping stale observations
-3. The 2026-05-01 hard cap is safe — all markets in the dataset resolved before this date
+3. The run-time hard cap (tomorrow midnight UTC) is safe — no genuine snapshot can be dated in the future
 
 ## Consequences
 
