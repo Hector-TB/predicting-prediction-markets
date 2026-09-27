@@ -34,29 +34,28 @@ After the pipeline refresh (step 2) is confirmed clean:
 
 ---
 
-## Next — live scoring
+## Next — search-and-predict with a live track record (ADR-017, `docs/design/search-and-predict.md`)
 
-### 5. Live scoring pipeline
-Fetch currently open Polymarket markets, run each through trained models, write predictions to DB.
-This is the core of "what does the model say about this market right now?"
-- Extend `fetch_markets.py` to also fetch open (unresolved) markets
-- Build snapshots for open markets (current price + rolling features)
-- Run models on those snapshots
-- Write results to `snapshots` + `predictions` tables in Supabase
+### 5. Prerequisites
+- Decide and apply ADR-018 (volume features use final lifetime volume — look-ahead); retrain
+- Refactor the per-snapshot feature code in `build_snapshots.py` into a shared function used by
+  training and the API; test it reproduces training snapshots exactly
+- DB migration: full feature vector + warnings on `snapshots`; resolution status on `markets`
 
 ### 6. FastAPI backend
-Serve the DB to a frontend:
-- `GET /markets` — list live markets with model predictions vs market price
-- `GET /markets/{id}` — prediction history for a single market
-- `GET /models` — model registry + metrics
+- `GET /resolve?q=` — URL / slug / event / condition ID / name → market(s)
+- `GET /predict?market_id=` — features as of now → all six models' probabilities + gap vs price,
+  with warnings for out-of-distribution markets (non-binary rejected); stores every lookup
+- `GET /track-record` — backtest metrics + live metrics over resolved lookups
+- Daily resolution job: record outcomes of looked-up markets (ADR-004 rule)
 
 ---
 
 ## Later — frontend
 
-### 7. React frontend
-Browse live markets, visualize predictions vs market price over time, surface trading edges.
-Blocked on: live scoring pipeline + API.
+### 7. React frontend (public portfolio site)
+Search / predict page (all six models + gap, headline model first), model track record
+(backtest + live), research page. Blocked on: API.
 
 ---
 

@@ -75,7 +75,8 @@ predicting-prediction-markets/
 │   ├── load_parquet.py                # migrate metadata + model registry to Supabase
 │   └── migrations/                    # SQL migration files (apply via Supabase MCP)
 ├── docs/
-│   ├── decisions/                     # Architecture Decision Records (ADR-001–016)
+│   ├── decisions/                     # Architecture Decision Records (ADR-001–018)
+│   ├── design/                        # design docs (search-and-predict site)
 │   └── paper/                         # course paper (LaTeX) + notes on its results
 ├── plots/                             # generated PNGs (gitignored)
 ├── .env.example
@@ -280,6 +281,8 @@ All significant decisions are documented in `docs/decisions/`. These are the aud
 | [ADR-014](docs/decisions/014-leakage-filter-closedtime-and-settled-rows.md) | Leakage filter: working `closedTime` lookup; drop snapshots priced ≥ 0.95 / ≤ 0.05 |
 | [ADR-015](docs/decisions/015-evaluation-methodology.md) | Evaluation: shared test rows, market-level bootstrap CIs, NO trades cost 1 − p |
 | [ADR-016](docs/decisions/016-dataset-versioning.md) | Immutable, manifest-described dataset versions on S3 (`v1`, `v2`, …) |
+| [ADR-017](docs/decisions/017-on-demand-prediction-live-track-record.md) | On-demand prediction via search, with a stored live track record |
+| [ADR-018](docs/decisions/018-volume-feature-look-ahead.md) | Volume features: final lifetime volume is look-ahead (proposed fix) |
 
 ---
 
