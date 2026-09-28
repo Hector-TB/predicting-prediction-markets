@@ -20,8 +20,7 @@ The course paper (research questions, methods, reported results) is `docs/paper/
 
 Dataset versions: **v1** = the course-project dataset the paper used (on S3, `datasets/v1/`, frozen); **v2** = the ADR-013/014 rebuild (45,143 markets fetched, not yet published).
 
-- Snapshot rebuild (`build_snapshots.py`, PID 38517) was ~89% done at 21:10 and expected to finish ~22:00–22:30. Output: `data/polymarket_ml_dataset.csv` (resumable — rerun the same command if it stopped early)
-- `logs/stage_backup.py` (PID 71724) waits for that build to exit, then uploads the CSV, meta, closed-times cache, fetch cache and build logs to `s3://<bucket>/staging/2026-09-27/` (a backup, **not** a dataset version). Log: `logs/stage_backup.log` (ends with `DONE`)
+- Snapshot rebuild finished 2026-09-27 ~22:20: `data/polymarket_ml_dataset.csv` has 2,788,184 rows (COMPLETE, no errors). Backed up to `s3://<bucket>/staging/2026-09-27/` (CSV, meta, closed-times cache, fetch cache, build logs — all sizes verified; log `logs/stage_backup.log`). This is a backup, **not** a dataset version
 - All 45,143 markets are LLM-categorised (`data/polymarket_markets_meta.csv`); backups `data/*.pre_categorize*.bak.csv` can be deleted after v2 is published
 - Supabase (free tier; was paused, restored 2026-09-27): still holds v1 — 20,948 markets, 1,458 trends, 9 model_runs, empty snapshots/predictions. Re-check tables after any unpause before assuming data loss
 - S3 bucket versioning enabled 2026-09-27; `sync.py push` removed (ADR-016)
@@ -31,7 +30,7 @@ Dataset versions: **v1** = the course-project dataset the paper used (on S3, `da
 
 ## Next session — start here (in order)
 
-1. **Check tonight's jobs:** `tail logs/build_snapshots_*.log` (latest) — did it finish without a traceback? `tail logs/stage_backup.log` — does it end with `DONE` and every file `OK`? If the build stopped early, rerun `python3 -u data_collection_pipeline/build_snapshots.py` (it resumes), then re-upload the backup.
+1. ~~Check tonight's jobs~~ — done: build COMPLETE, backup on S3 verified.
 2. **Restart the Mac** (clears swap, frees disk) if not done; confirm ≥ 4 GB free.
 3. **Run the rest of the pipeline:** `python3 data_collection_pipeline/run_pipeline.py --skip-markets --skip-snapshots`. First full run of the streamed pipeline — watch for errors; nothing has been run end to end on v2 yet.
 4. **Publish v2:** `python3 data/sync.py publish v2 --parent v1 --notes "…"` (dry-run first); commit `data/manifests/v2.json`; push.
