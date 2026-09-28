@@ -158,14 +158,12 @@ def summarize(meta_src, clean_src) -> dict:
     }
     if "split" in meta:
         out["markets_fetched_by_split"] = {k: int(v) for k, v in meta["split"].value_counts().items()}
-        test_start = start[meta["split"] == "test"]
-        if len(test_start):
-            out["test_split_starts"] = str(test_start.min().date())
 
     markets: dict[str, set] = {}
     rows: dict[str, int] = {}
     yes = n = 0
     ts_min = ts_max = None
+    split_ts: dict[str, list] = {}   # split -> [first, last] snapshot
     for b in pq.ParquetFile(clean_src).iter_batches(batch_size=250_000,
                                                     columns=["market_id", "split", "outcome", "snapshot_timestamp"]):
         df = b.to_pandas()
@@ -175,6 +173,9 @@ def summarize(meta_src, clean_src) -> dict:
         for split, g in df.groupby("split"):
             markets.setdefault(split, set()).update(g["market_id"].unique())
             rows[split] = rows.get(split, 0) + len(g)
+            lo, hi = ts[g.index].min(), ts[g.index].max()
+            prev = split_ts.get(split)
+            split_ts[split] = [lo, hi] if prev is None else [min(prev[0], lo), max(prev[1], hi)]
         yes += int(df["outcome"].sum())
         n += len(df)
     out.update({
@@ -185,6 +186,8 @@ def summarize(meta_src, clean_src) -> dict:
         "clean_snapshot_yes_rate": round(yes / n, 4) if n else None,
         "snapshot_timestamp_min": str(ts_min),
         "snapshot_timestamp_max": str(ts_max),
+        # ADR-021: the last train snapshot must precede the first test snapshot
+        "snapshot_range_by_split": {k: [str(a), str(b)] for k, (a, b) in split_ts.items()},
     })
     return out
 
