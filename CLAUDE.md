@@ -39,7 +39,7 @@ Dataset versions: **v1** = the course-project dataset the paper used (on S3, `da
 7. **Re-score:** `python3 analysis/rescore_paper.py --out docs/paper/rescore_v2_data.md` — the key question: does the paper's gain over the market hold on v2? Then update the README results section (neutral tone — see memory).
 8. **Refresh Supabase with v2:** `python3 db/load_parquet.py` (tags model runs `clean_v2`).
 9. **Merge** `pipeline-leakage-and-categories` → `main` (or open a PR) once the v2 run works.
-10. **Then build:** the one-command refresh with automatic S3 staging backups + model releases (ROADMAP 4b, ADR-019), then the site prerequisites (ROADMAP 5: ADR-018, shared feature function, DB migration for the live track record) and the API/site (`docs/design/search-and-predict.md`).
+10. **Then build:** the one-command refresh with automatic S3 staging backups + model releases (ROADMAP 4b, ADR-019) and the fixed incremental fetch + coverage check (ADR-020) — don't run a plain incremental `fetch_markets.py` before that fix, then the site prerequisites (ROADMAP 5: ADR-018, shared feature function, DB migration for the live track record) and the API/site (`docs/design/search-and-predict.md`).
 
 ## Key conventions
 
@@ -110,3 +110,4 @@ Dataset versions: **v1** = the course-project dataset the paper used (on S3, `da
 - ADR-017: on-demand prediction via search + stored live track record (design: `docs/design/search-and-predict.md`)
 - ADR-018 (Proposed): volume features use final lifetime volume — look-ahead; fix before live prediction
 - ADR-019: immutable model releases (rN) with change reports, gated promotion, one-command rollback
+- ADR-020: incremental fetch by scheduled end date (≥ last fetch − 30d, no upper bound) — current start-date fetch misses long-running markets; pre-publish coverage check

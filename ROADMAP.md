@@ -36,7 +36,7 @@ After the pipeline refresh (step 2) is confirmed clean:
 
 ### 4b. One-command refresh with strict model releases (ADR-019)
 After the first v2 run works end to end, turn it into one command (`/sync-and-train`):
-fetch → snapshots → pipeline → publish dataset vN → train → candidate release rN with a
+fetch (by scheduled end date, ADR-020) → snapshots → pipeline → coverage check → publish dataset vN → train → candidate release rN with a
 "what changed and why" report vs production → gated, explicit promotion; `rollback` restores
 the previous release.
 

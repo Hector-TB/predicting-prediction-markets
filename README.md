@@ -75,7 +75,7 @@ predicting-prediction-markets/
 │   ├── load_parquet.py                # migrate metadata + model registry to Supabase
 │   └── migrations/                    # SQL migration files (apply via Supabase MCP)
 ├── docs/
-│   ├── decisions/                     # Architecture Decision Records (ADR-001–019)
+│   ├── decisions/                     # Architecture Decision Records (ADR-001–020)
 │   ├── design/                        # design docs (search-and-predict site)
 │   └── paper/                         # course paper (LaTeX) + notes on its results
 ├── plots/                             # generated PNGs (gitignored)
@@ -284,6 +284,7 @@ All significant decisions are documented in `docs/decisions/`. These are the aud
 | [ADR-017](docs/decisions/017-on-demand-prediction-live-track-record.md) | On-demand prediction via search, with a stored live track record |
 | [ADR-018](docs/decisions/018-volume-feature-look-ahead.md) | Volume features: final lifetime volume is look-ahead (proposed fix) |
 | [ADR-019](docs/decisions/019-model-releases-promotion-rollback.md) | Immutable model releases, change reports, gated promotion, rollback |
+| [ADR-020](docs/decisions/020-incremental-fetch-by-end-date.md) | Incremental market fetch by scheduled end date, with a look-back |
 
 ---
 
