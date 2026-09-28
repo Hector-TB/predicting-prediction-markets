@@ -55,6 +55,15 @@ Each snapshot is enriched by joining to the category's Trends time series on the
 - Trends model and non-trends model cannot be fairly compared on identical test sets unless the `other` category is excluded
 - The trends enrichment requires pytrends library and has no API key requirement (Google public data), but is subject to rate limiting
 
+## Amendment (2026-09-28): join on completed weeks, full-range re-fetch
+
+Found while reviewing the pipeline before the first v2 run.
+
+1. **Join on completed weeks.** The Decision above says each snapshot joins to the most recent week *before* the snapshot. The code joined on `week_start`, which picks the week that *contains* the snapshot. That week isn't over yet, so the features could see up to 6 days after the snapshot. `merge_trends.py` now joins on `available_at = week_start + 7 days`. Snapshots therefore see trend values one week later than before.
+2. **Full-range re-fetch every run.** `fetch_category_trends.py` used to fetch only the weeks after the last saved one and append them. Google scales each request to 0–100 over that request's own timeframe, and returns daily points for ranges shorter than about 9 months. A 2-week incremental fetch would have appended daily rows on a different scale. The script now always fetches from 2023-01-01 to today, checks that the points are weekly, and replaces the file only when every category succeeds (it exits non-zero otherwise).
+
+**Consequences:** Trend values in v2 are not comparable with v1: the scale changes with the timeframe, and the join is shifted by a week. A limitation remains: because each series is scaled over the whole timeframe, its 0–100 scale depends on the later peak. That is mild look-ahead, and it is unavoidable with Google Trends. Live prediction (ADR-017) must use the same completed-week rule.
+
 ## Related ADRs
 
 - ADR-008: Market filters (the 9 categories that Trends is built on top of)

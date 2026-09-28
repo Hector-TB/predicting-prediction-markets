@@ -177,10 +177,12 @@ def main():
     print(f"Loaded {len(meta):,} markets from {META_CSV}")
 
     # ── Find uncategorised markets ─────────────
-    # Re-classify rows that are missing, "other", or a legacy Gamma label
-    # outside VALID_CATEGORIES (e.g. "US-current-affairs")
+    # Classify rows that are missing or carry a legacy Gamma label outside
+    # VALID_CATEGORIES (e.g. "US-current-affairs"). "other" is a valid answer:
+    # re-sending those every run would cost API calls and let their category
+    # drift between runs.
     cat = meta["category"].fillna("").astype(str).str.strip().str.lower()
-    needs_category = meta[~cat.isin(VALID_CATEGORIES) | (cat == "other")].copy()
+    needs_category = meta[~cat.isin(VALID_CATEGORIES)].copy()
 
     already_done = len(meta) - len(needs_category)
     print(f"  Already categorised: {already_done:,}")

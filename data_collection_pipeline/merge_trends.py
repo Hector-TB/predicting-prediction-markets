@@ -18,16 +18,16 @@ TREND_COLS = ["trend_value", "trend_ma4", "trend_change_4w", "trend_spike", "has
 
 
 def merge_batch(snapshots: pd.DataFrame, trends: pd.DataFrame) -> pd.DataFrame:
-    """Attach each snapshot's most recent weekly trend row for its category."""
+    """Attach each snapshot's most recent *completed* weekly trend row for its category (ADR-009)."""
     snapshots["snapshot_timestamp"] = pd.to_datetime(snapshots["snapshot_timestamp"], format="ISO8601", utc=True)
     merged = pd.merge_asof(
         snapshots.sort_values("snapshot_timestamp"),
         trends,
         left_on="snapshot_timestamp",
-        right_on="week_start",
+        right_on="available_at",
         by="category",
         direction="backward",
-    ).drop(columns=["week_start"])
+    ).drop(columns=["week_start", "available_at"])
 
     # Fill snapshots that predate the trends data or have no category mapping
     for col in ["trend_value", "trend_ma4", "trend_change_4w"]:
@@ -41,7 +41,11 @@ def main():
     log.info("Loading trend features...")
     trends = pd.read_parquet(TRENDS_PATH)
     trends["week_start"] = pd.to_datetime(trends["week_start"], utc=True)
-    trends = trends[["category", "week_start"] + TREND_COLS].sort_values("week_start")
+    # A weekly point covers week_start … week_start + 7d, so it is only known
+    # once that week is over. Joining on week_start would let a snapshot see up
+    # to 6 days of its own future.
+    trends["available_at"] = trends["week_start"] + pd.Timedelta(days=7)
+    trends = trends[["category", "week_start", "available_at"] + TREND_COLS].sort_values("available_at")
     log.info("  %s rows across %d categories", f"{len(trends):,}", trends["category"].nunique())
 
     # Streamed in batches: the full dataset doesn't fit in memory on 8 GB machines.

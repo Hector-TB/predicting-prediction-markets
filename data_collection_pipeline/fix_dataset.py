@@ -19,6 +19,7 @@ Run after build_snapshots.py, before training any models.
 
 import logging
 import os
+import sys
 import pandas as pd
 from pathlib import Path
 
@@ -115,10 +116,10 @@ def main():
 
     if not META_CSV.exists():
         print(f"ERROR: {META_CSV} not found.")
-        return
+        sys.exit(1)
     if not DATASET_CSV.exists():
         print(f"ERROR: {DATASET_CSV} not found.")
-        return
+        sys.exit(1)
 
     # ── Fix 1: meta (small — fits in memory) ───────────
     meta = pd.read_csv(META_CSV)

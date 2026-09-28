@@ -63,6 +63,13 @@ def nan_to_none(df: pd.DataFrame) -> pd.DataFrame:
     return df.where(pd.notnull(df), other=None)
 
 
+def upsert(key: list[str], df: pd.DataFrame) -> str:
+    """ON CONFLICT clause that overwrites every non-key column, so a reload
+    with a new dataset version replaces stale rows instead of keeping them."""
+    updates = ", ".join(f'"{c}" = EXCLUDED."{c}"' for c in df.columns if c not in key)
+    return f"({', '.join(key)}) DO UPDATE SET {updates}"
+
+
 def bulk_insert(conn, table: str, df: pd.DataFrame,
                 chunk_size: int = 5_000, conflict: str = "DO NOTHING") -> int:
     if df.empty:
@@ -113,8 +120,8 @@ def load_markets(conn) -> int:
                  "split", "total_volume", "duration_days"]]
 
     print(f"  Rows: {len(df):,}")
-    n = bulk_insert(conn, "markets", df, conflict="(market_id) DO NOTHING")
-    print(f"  Inserted: {n:,}")
+    n = bulk_insert(conn, "markets", df, conflict=upsert(["market_id"], df))
+    print(f"  Upserted: {n:,}")
     return n
 
 
@@ -132,8 +139,8 @@ def load_trends(conn) -> int:
     print(f"  Rows: {len(df):,}")
 
     n = bulk_insert(conn, "trends", df,
-                    conflict="(category, week_start) DO NOTHING")
-    print(f"  Inserted: {n:,}")
+                    conflict=upsert(["category", "week_start"], df))
+    print(f"  Upserted: {n:,}")
     return n
 
 
