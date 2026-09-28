@@ -79,6 +79,10 @@ def main():
                 log.error("Aborting: fetch_markets failed.")
                 sys.exit(1)
 
+        if not run(PIPELINE / "meta_checks.py", "meta_checks — meta matches Gamma (ADR-023)"):
+            log.error("Aborting: meta fails integrity checks — fix it with scripts/refresh_meta.py.")
+            sys.exit(1)
+
         if not args.skip_snapshots:
             build_args = ["--full"] if args.rebuild_snapshots else []
             if not run(PIPELINE / "build_snapshots.py", "build_snapshots — CLOB price history", *build_args):

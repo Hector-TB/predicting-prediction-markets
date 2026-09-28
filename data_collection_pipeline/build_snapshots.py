@@ -28,6 +28,8 @@ import sys
 from datetime import timedelta
 from pathlib import Path
 from concurrent.futures import ProcessPoolExecutor
+
+from meta_checks import assert_meta_ok
 from typing import Optional
 
 # ─────────────────────────────────────────────
@@ -291,7 +293,8 @@ def main(full: bool = False, workers: int = WORKERS):
         print(f"ERROR: {INPUT_META} not found. Run fetch_markets.py first.")
         sys.exit(1)
 
-    markets_df = pd.read_csv(INPUT_META)
+    markets_df = pd.read_csv(INPUT_META, dtype={"clob_token_id": str})
+    assert_meta_ok(markets_df)   # ADR-023: never build from estimated or placeholder values
     markets_df["start_date"] = pd.to_datetime(markets_df["start_date"], format="ISO8601", utc=True)
     markets_df["end_date"]   = pd.to_datetime(markets_df["end_date"], format="ISO8601", utc=True)
 

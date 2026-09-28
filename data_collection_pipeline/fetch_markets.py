@@ -62,6 +62,41 @@ META_COLUMNS = [
 # INCREMENTAL SUPPORT
 # ─────────────────────────────────────────────
 
+# Our own columns, kept from the existing meta on merge; everything else is
+# Gamma's and is always replaced by the fresh fetch (ADR-023)
+OWN_COLUMNS = ["category", "split"]
+
+
+def merge_fresh(existing: pd.DataFrame, fresh: pd.DataFrame) -> tuple[pd.DataFrame, int, int]:
+    """
+    Merge freshly fetched markets into the existing meta.
+
+    - Markets in both: every Gamma field comes from `fresh`; only `category`
+      (LLM) and `split` are kept from `existing`. Keeping the old row instead
+      once preserved estimated dates for 14,886 markets (ADR-023).
+    - Markets only in `fresh`: added with split = "test" (ADR-021).
+    - Markets only in `existing`: kept unchanged (not returned by this fetch).
+
+    Returns (merged, n_updated, n_added).
+    """
+    fresh = fresh.drop_duplicates("market_id", keep="last")
+    gamma_cols = [c for c in fresh.columns if c not in OWN_COLUMNS]
+    old = existing.set_index("market_id")
+    new = fresh.set_index("market_id")
+
+    both = old.index.intersection(new.index)
+    updated = new.loc[both, [c for c in gamma_cols if c != "market_id"]].join(old.loc[both, OWN_COLUMNS])
+    added = new.loc[new.index.difference(old.index)].copy()
+    added["split"] = "test"
+    kept = old.loc[old.index.difference(new.index)]
+
+    merged = pd.concat([f for f in (kept, updated, added) if len(f)]).reset_index()
+    merged = merged[existing.columns.tolist()]
+    merged["_start"] = pd.to_datetime(merged["start_date"], format="ISO8601", utc=True)
+    merged = merged.sort_values("_start").drop(columns="_start").reset_index(drop=True)
+    return merged, len(both), len(added)
+
+
 def load_existing_meta() -> tuple:
     """
     Returns (existing_df | None, fetch_from_date).
@@ -326,8 +361,8 @@ def main(full: bool = False):
 
     existing_df, fetch_from = load_existing_meta()
     if full:
-        # Re-fetch everything (ADR-013). Existing rows still win on merge below,
-        # so LLM categories and previously stored markets are preserved.
+        # Re-fetch everything (ADR-013). Gamma fields are refreshed on merge;
+        # LLM categories and the split are kept (ADR-023).
         fetch_from = START_DATE_MIN
         log.info("  --full: re-fetching from %s with checkpoints", fetch_from)
 
@@ -337,21 +372,12 @@ def main(full: bool = False):
         return
 
     if existing_df is not None:
-        known_ids = set(existing_df["market_id"])
-        new_df = new_df[~new_df["market_id"].isin(known_ids)].reset_index(drop=True)
-        print(f"\n  {len(new_df):,} genuinely new markets after dedup")
-
-        if new_df.empty:
-            print("  Nothing new — output unchanged.")
-            return
-
-        # New markets always go to test (ADR-021). That is safe even for one that
-        # resolved before the cutoff: fix_leakage.py drops every test row dated
-        # before the cutoff, so it simply contributes no rows.
-        new_df["split"] = "test"
-
-        markets_df = pd.concat([existing_df, new_df], ignore_index=True)
-        markets_df = markets_df.sort_values("start_date").reset_index(drop=True)
+        # Fresh Gamma values replace the stored ones for every re-fetched market;
+        # only category and split are ours (ADR-023). New markets always go to
+        # test (ADR-021) — safe even for one that resolved before the cutoff:
+        # fix_leakage.py drops every test row dated before the cutoff.
+        markets_df, n_updated, n_added = merge_fresh(existing_df, new_df)
+        print(f"\n  {n_updated:,} existing markets refreshed from Gamma, {n_added:,} new")
     else:
         # First run — the split needs resolution times, which recompute_split.py
         # looks up (ADR-021). Until then everything is test.
@@ -359,6 +385,16 @@ def main(full: bool = False):
         markets_df["split"] = "test"
         log.warning("  First run: all markets marked test — run scripts/recompute_split.py next (ADR-021).")
 
+    # Keep the exact Gamma records behind this meta, so meta_checks.py can
+    # verify every row (ADR-023). Newest file wins in load_fetch_cache().
+    FETCH_CACHE_DIR.mkdir(parents=True, exist_ok=True)
+    new_df.to_csv(FETCH_CACHE_DIR / "latest_fetch.csv", index=False)
+
+    from meta_checks import check_meta
+    problems = check_meta(markets_df)
+    if problems:
+        raise SystemExit(f"ERROR: merged meta fails integrity checks, not saved: "
+                         f"{ {k: len(v) for k, v in problems.items()} } (ADR-023)")
     markets_df.to_csv(OUTPUT_META, index=False)
     print(f"\nSaved: {OUTPUT_META}")
     print(f"  Markets: {len(markets_df):,}")

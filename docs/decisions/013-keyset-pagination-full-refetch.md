@@ -51,6 +51,10 @@ A spot check of 2025-03-01 → 2025-03-15 with keyset pagination found 386 marke
 - **Split moves:** the recomputed cutoff changes which markets are train vs test. Metrics from before this ADR are not directly comparable with metrics after it; all models must be retrained and re-evaluated.
 - **Risk:** the Gamma API may change again; the fail-loud behaviour will surface this rather than hide it.
 
+## Amendment (2026-09-28)
+
+The `--full` merge kept existing rows over re-fetched ones, which preserved estimated metadata for 14,886 markets. Fresh Gamma values now always win; only `category` and `split` are kept. See ADR-023.
+
 ## Related ADRs
 
 - ADR-001: Temporal train/test split (method unchanged, cutoff recomputed)

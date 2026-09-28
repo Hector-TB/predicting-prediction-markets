@@ -260,6 +260,11 @@ def cmd_publish(s3, args) -> None:
         sys.exit(f"ERROR: required files missing locally: {missing}")
     files = [f for f in REQUIRED_FILES + OPTIONAL_FILES if (DATA_DIR / f).exists()]
 
+    # ADR-023: never publish meta with estimated or placeholder values
+    sys.path.insert(0, str(ROOT / "data_collection_pipeline"))
+    from meta_checks import assert_meta_ok
+    assert_meta_ok(pd.read_csv(DATA_DIR / META_FILE, dtype={"clob_token_id": str}))
+
     log.info("Building manifest for %s ...", version)
     manifest = {
         "version":    version,

@@ -1,6 +1,6 @@
 # CLAUDE.md — Predicting Prediction Markets
 
-<!-- When compacting: preserve the active data split (80/20 at market level by resolution time, ADR-021), current ADR count (ADR-001 through ADR-022), and any files modified this session. -->
+<!-- When compacting: preserve the active data split (80/20 at market level by resolution time, ADR-021), current ADR count (ADR-001 through ADR-023), and any files modified this session. -->
 
 This file is read by Claude Code at the start of every session. Keep it under 200 lines.
 
@@ -36,13 +36,15 @@ Dataset versions: **v1** = the course-project dataset the paper used (on S3, `da
 4. **Publish v2:** `python3 data/sync.py publish v2 --parent v1 --notes "…"` (dry-run first); commit `data/manifests/v2.json`; push.
 5. ~~Decide ADR-018~~ — done 2026-09-28: `log_volume` dropped, split recomputed by resolution time (ADR-021; meta already updated, T = 2026-07-01). Pipeline bugs from the pre-v2 review fixed (commit c31d971).
 6. **Train on v2**, one at a time: LR and XGBoost (each ± `--trends`), RF, RF + Trends. Only if a run is killed (exit 137) apply memory fixes — user prefers no preemptive optimisation.
-6b. **Build v3 (ADR-022):** `python3 data_collection_pipeline/run_pipeline.py --skip-markets --rebuild-snapshots` after v2 is published. First move the v2 `polymarket_ml_dataset.csv` aside: it's in the S3 staging backup, and the build refuses to resume it. The rebuild takes ~5 h with 4 workers. Then publish v3 --parent v2, train, and compare with v2 (including by `days_before_close`).
+6b. **Build v3 (ADR-022):** `python3 data_collection_pipeline/run_pipeline.py --skip-markets --rebuild-snapshots` (~5–7 h, 4 workers). The meta was refreshed from Gamma on 2026-09-28 (ADR-023: 45,130 markets; 14,886 estimated date rows fixed, 13 too-short markets dropped). The v2 snapshot CSV is at `data/polymarket_ml_dataset.v2.csv`. Then publish v3 --parent v2, train, and compare with v2 (including by `days_before_close`).
 7. **Re-score:** `python3 analysis/rescore_paper.py --out docs/paper/rescore_v2_data.md` — the key question: does the paper's gain over the market hold on v2? Then update the README results section (neutral tone — see memory).
 8. **Refresh Supabase with v2:** `python3 db/load_parquet.py` (tags model runs `clean_v2`).
 9. **Merge** `pipeline-leakage-and-categories` → `main` (or open a PR) once the v2 run works.
 10. **Then build:** the one-command refresh with automatic S3 staging backups + model releases (ROADMAP 4b, ADR-019) and the fixed incremental fetch + coverage check (ADR-020) — don't run a plain incremental `fetch_markets.py` before that fix, then the site prerequisites (ROADMAP 5: shared feature function, DB migration for the live track record) and the API/site (`docs/design/search-and-predict.md`).
 
 ## Key conventions
+
+**Market metadata (ADR-023):** every field except `category`/`split` must equal Gamma's — never estimate, back-fill or placeholder a value; drop markets that can't be verified. `python data_collection_pipeline/meta_checks.py` must pass.
 
 **Path resolution:** `ROOT = Path(__file__).resolve().parent` (or `.parent.parent` as needed) — never hardcode relative paths.
 
@@ -114,3 +116,4 @@ Dataset versions: **v1** = the course-project dataset the paper used (on S3, `da
 - ADR-020: incremental fetch by scheduled end date (≥ last fetch − 30d, no upper bound) — current start-date fetch misses long-running markets; pre-publish coverage check
 - ADR-021: leak-free evaluation — split by resolution time + pre-cutoff test rows dropped, thresholds from held-out train data, grouped CV, `log_volume` dropped
 - ADR-022: no 14-day pre-close cutoff from v3 (price rule only); full snapshot rebuild with retries + settings guard
+- ADR-023: meta must match Gamma — no estimated/placeholder values; fresh fetch wins on merge (category/split kept); `meta_checks.py` blocks pipeline/build/publish; repair with `scripts/refresh_meta.py`
