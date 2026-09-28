@@ -40,10 +40,18 @@ fetch (by scheduled end date, ADR-020) → snapshots → pipeline → coverage c
 "what changed and why" report vs production → gated, explicit promotion; `rollback` restores
 the previous release.
 
+### 4c. Feature research (separate tasks)
+- **Rework Google Trends.** The current setup is weak: category-level keywords, one 0–100 scale
+  over the whole period (the scale depends on later peaks), weekly granularity. Revisit before relying on it
+  (ADR-009 amendment lists the known issues).
+- **Volume to date.** Rebuild volume as cumulative traded volume up to each snapshot from
+  `data-api.polymarket.com/trades` (ADR-018 option 2). That endpoint caps at ~10.5k trades per market, so large
+  markets need another source (e.g. the orderbook subgraph). New ADR + dataset version.
+
 ## Next — search-and-predict with a live track record (ADR-017, `docs/design/search-and-predict.md`)
 
 ### 5. Prerequisites
-- Decide and apply ADR-018 (volume features use final lifetime volume — look-ahead); retrain
+- ~~Decide and apply ADR-018~~ ✓ `log_volume` dropped (ADR-021)
 - Refactor the per-snapshot feature code in `build_snapshots.py` into a shared function used by
   training and the API; test it reproduces training snapshots exactly
 - DB migration: full feature vector + warnings on `snapshots`; resolution status on `markets`

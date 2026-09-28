@@ -1,6 +1,6 @@
 # CLAUDE.md — Predicting Prediction Markets
 
-<!-- When compacting: preserve the active data split (train=80%/test=20% temporal at market level), current ADR count (ADR-001 through ADR-020), and any files modified this session. -->
+<!-- When compacting: preserve the active data split (80/20 at market level by resolution time, ADR-021), current ADR count (ADR-001 through ADR-021), and any files modified this session. -->
 
 This file is read by Claude Code at the start of every session. Keep it under 200 lines.
 
@@ -34,12 +34,12 @@ Dataset versions: **v1** = the course-project dataset the paper used (on S3, `da
 2. **Restart the Mac** (clears swap, frees disk) if not done; confirm ≥ 4 GB free.
 3. **Run the rest of the pipeline:** `python3 data_collection_pipeline/run_pipeline.py --skip-markets --skip-snapshots`. First full run of the streamed pipeline — watch for errors; nothing has been run end to end on v2 yet.
 4. **Publish v2:** `python3 data/sync.py publish v2 --parent v1 --notes "…"` (dry-run first); commit `data/manifests/v2.json`; push.
-5. **Decide ADR-018 with the user** (volume features use final lifetime volume = look-ahead). Recommendation: train with and without `log_volume`, compare with `rescore_paper.py`, then drop it.
+5. ~~Decide ADR-018~~ — done 2026-09-28: `log_volume` dropped, split recomputed by resolution time (ADR-021; meta already updated, T = 2026-07-01). Pipeline bugs from the pre-v2 review fixed (commit c31d971).
 6. **Train on v2**, one at a time: LR and XGBoost (each ± `--trends`), RF, RF + Trends. Only if a run is killed (exit 137) apply memory fixes — user prefers no preemptive optimisation.
 7. **Re-score:** `python3 analysis/rescore_paper.py --out docs/paper/rescore_v2_data.md` — the key question: does the paper's gain over the market hold on v2? Then update the README results section (neutral tone — see memory).
 8. **Refresh Supabase with v2:** `python3 db/load_parquet.py` (tags model runs `clean_v2`).
 9. **Merge** `pipeline-leakage-and-categories` → `main` (or open a PR) once the v2 run works.
-10. **Then build:** the one-command refresh with automatic S3 staging backups + model releases (ROADMAP 4b, ADR-019) and the fixed incremental fetch + coverage check (ADR-020) — don't run a plain incremental `fetch_markets.py` before that fix, then the site prerequisites (ROADMAP 5: ADR-018, shared feature function, DB migration for the live track record) and the API/site (`docs/design/search-and-predict.md`).
+10. **Then build:** the one-command refresh with automatic S3 staging backups + model releases (ROADMAP 4b, ADR-019) and the fixed incremental fetch + coverage check (ADR-020) — don't run a plain incremental `fetch_markets.py` before that fix, then the site prerequisites (ROADMAP 5: shared feature function, DB migration for the live track record) and the API/site (`docs/design/search-and-predict.md`).
 
 ## Key conventions
 
@@ -49,7 +49,7 @@ Dataset versions: **v1** = the course-project dataset the paper used (on S3, `da
 
 **Class imbalance:** always `class_weight='balanced'` (sklearn) or `scale_pos_weight` (XGBoost). No exceptions.
 
-**Train/test split:** market-level temporal — oldest 80% train, newest 20% test. Never mix snapshots from the same market across splits. See ADR-001.
+**Train/test split:** market-level, by resolution time — first 80% resolved = train; test rows dated before the cutoff are `test_pre_cutoff` (unused). Never mix snapshots from the same market across splits; never tune thresholds or anything else on the test set. See ADR-021.
 
 **Shared evaluation code:** import `evaluate`, `check_calibration`, `find_optimal_threshold` from `models.common.evaluation` — never redefine them.
 
@@ -91,7 +91,7 @@ Dataset versions: **v1** = the course-project dataset the paper used (on S3, `da
 
 ## Architecture decisions (docs/decisions/)
 
-- ADR-001: temporal market-level 80/20 train/test split
+- ADR-001: temporal market-level 80/20 train/test split (split rule superseded by ADR-021)
 - ADR-002: snapshot window design
 - ADR-003: rolling window selection (7d + 14d)
 - ADR-004: outcome threshold
@@ -108,6 +108,7 @@ Dataset versions: **v1** = the course-project dataset the paper used (on S3, `da
 - ADR-015: evaluation methodology — shared test rows, market-level bootstrap CIs, NO bets cost 1−p
 - ADR-016: immutable dataset versions on S3 (`datasets/vN/` + manifest); `sync.py publish/pull`
 - ADR-017: on-demand prediction via search + stored live track record (design: `docs/design/search-and-predict.md`)
-- ADR-018 (Proposed): volume features use final lifetime volume — look-ahead; fix before live prediction
+- ADR-018: volume features used final lifetime volume (look-ahead) — dropped (ADR-021)
 - ADR-019: immutable model releases (rN) with change reports, gated promotion, one-command rollback
 - ADR-020: incremental fetch by scheduled end date (≥ last fetch − 30d, no upper bound) — current start-date fetch misses long-running markets; pre-publish coverage check
+- ADR-021: leak-free evaluation — split by resolution time + pre-cutoff test rows dropped, thresholds from held-out train data, grouped CV, `log_volume` dropped

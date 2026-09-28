@@ -63,7 +63,7 @@ FEATURES_FULL = [
     "price_mean_14d", "price_volatility_14d", "price_min_14d", "price_max_14d",
     "price_change_14d", "price_range_14d", "price_trend_14d",
     "pct_lifetime_elapsed", "days_before_close", "duration_days",
-    "log_volume", "category_encoded",
+    "category_encoded",  # log_volume dropped: final lifetime volume = look-ahead (ADR-018)
 ]
 
 FEATURES_TRENDS = FEATURES_FULL + [
@@ -221,7 +221,8 @@ def main():
     proba_tr    = rf_trends.predict_proba(X_test_trends)[:, 1]
     proba_cal   = iso.transform(proba_tr)
 
-    threshold, _ = find_optimal_threshold(y_test, proba_cal)
+    # Threshold chosen on the calibration markets — never on the test set (ADR-021)
+    threshold, _ = find_optimal_threshold(y_cal, iso.transform(p_cal_raw))
 
     evaluate(y_test, proba_price, label="RF Trends — price only", threshold=threshold)
     evaluate(y_test, proba_full,  label="RF Trends — full",       threshold=threshold)

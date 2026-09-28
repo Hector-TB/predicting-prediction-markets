@@ -64,20 +64,17 @@ META_COLUMNS = [
 
 def load_existing_meta() -> tuple:
     """
-    Returns (existing_df | None, fetch_from_date, split_cutoff | None).
+    Returns (existing_df | None, fetch_from_date).
     fetch_from_date: start_date_min to pass to the API.
-    split_cutoff:    start_date of the first test market (freeze existing split).
     """
     if not OUTPUT_META.exists():
-        return None, START_DATE_MIN, None
+        return None, START_DATE_MIN
 
     df = pd.read_csv(OUTPUT_META)
     df["start_date"] = pd.to_datetime(df["start_date"], utc=True, errors="coerce")
     fetch_from   = (df["start_date"].max() - pd.Timedelta(days=7)).strftime("%Y-%m-%d")
-    test_cutoff  = df[df["split"] == "test"]["start_date"].min() if "split" in df.columns else None
-    split_cutoff = test_cutoff.strftime("%Y-%m-%d") if test_cutoff is not pd.NaT and test_cutoff is not None else None
     print(f"  Found {len(df):,} existing markets — fetching from {fetch_from}")
-    return df, fetch_from, split_cutoff
+    return df, fetch_from
 
 
 # ─────────────────────────────────────────────
@@ -327,7 +324,7 @@ def main(full: bool = False):
     print("  POLYMARKET — FETCH & FILTER MARKETS")
     print("█" * 60 + "\n")
 
-    existing_df, fetch_from, split_cutoff = load_existing_meta()
+    existing_df, fetch_from = load_existing_meta()
     if full:
         # Re-fetch everything (ADR-013). Existing rows still win on merge below,
         # so LLM categories and previously stored markets are preserved.
@@ -348,25 +345,19 @@ def main(full: bool = False):
             print("  Nothing new — output unchanged.")
             return
 
-        # New markets are temporally after the existing split cutoff → assign test
-        if split_cutoff:
-            cutoff_ts = pd.Timestamp(split_cutoff, tz="UTC")
-            new_df["split"] = new_df["start_date"].apply(
-                lambda d: "test" if d >= cutoff_ts else "train"
-            )
-        else:
-            new_df["split"] = "test"
+        # New markets always go to test (ADR-021). That is safe even for one that
+        # resolved before the cutoff: fix_leakage.py drops every test row dated
+        # before the cutoff, so it simply contributes no rows.
+        new_df["split"] = "test"
 
         markets_df = pd.concat([existing_df, new_df], ignore_index=True)
         markets_df = markets_df.sort_values("start_date").reset_index(drop=True)
     else:
-        # First run — compute 80/20 split on full corpus
+        # First run — the split needs resolution times, which recompute_split.py
+        # looks up (ADR-021). Until then everything is test.
         markets_df = new_df.sort_values("start_date").reset_index(drop=True)
-        n           = len(markets_df)
-        cutoff_idx  = int(n * 0.8)
-        cutoff_date = markets_df.iloc[cutoff_idx]["start_date"]
-        markets_df["split"] = ["train"] * cutoff_idx + ["test"] * (n - cutoff_idx)
-        print(f"  Split cutoff: {cutoff_date.date()} — train={cutoff_idx:,}  test={n-cutoff_idx:,}")
+        markets_df["split"] = "test"
+        log.warning("  First run: all markets marked test — run scripts/recompute_split.py next (ADR-021).")
 
     markets_df.to_csv(OUTPUT_META, index=False)
     print(f"\nSaved: {OUTPUT_META}")
@@ -374,7 +365,7 @@ def main(full: bool = False):
     print(f"  Columns: {list(markets_df.columns)}")
     if full and existing_df is not None:
         log.warning("\nFull re-fetch merged under the OLD frozen split. "
-                    "Run scripts/recompute_split.py before build_snapshots.py (ADR-013).")
+                    "Run scripts/recompute_split.py before build_snapshots.py (ADR-013, ADR-021).")
     else:
         print(f"\nNext: run build_snapshots.py")
 

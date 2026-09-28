@@ -23,7 +23,6 @@ FEATURES = [
     "price_at_snapshot", "days_before_close", "pct_lifetime_elapsed",
     "price_mean_7d", "price_volatility_7d", "price_change_7d",
     "price_mean_14d", "price_volatility_14d", "price_change_14d",
-    "log_volume",
 ]
 TARGET = "outcome"
 

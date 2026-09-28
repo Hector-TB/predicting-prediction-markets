@@ -25,7 +25,7 @@ print(f"Best CV ROC-AUC: {search.best_score_:.4f}")
 
 # ── FEATURE DEFINITIONS ──────────────────────────────────────────────────────────
 numeric_features = [
-    'price_at_snapshot', 'target_percentile', 'duration_days', 'log_volume',
+    'price_at_snapshot', 'target_percentile', 'duration_days',
     'price_volatility_7d', 'price_change_7d', 'price_trend_7d',
     'price_volatility_14d', 'price_change_14d', 'price_trend_14d',
 ]

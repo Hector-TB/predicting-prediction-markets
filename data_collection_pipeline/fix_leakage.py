@@ -223,10 +223,34 @@ def load_inactivity_cutoffs(path: pathlib.Path, closed_times: pd.DataFrame) -> p
     return inactivity_cutoffs(sub.loc[~settled])
 
 
+def split_cutoff(closed_times: pd.DataFrame) -> pd.Timestamp:
+    """
+    The train/test cutoff T (ADR-021): the latest resolution among train markets.
+    Every train label is known by T, so only test rows dated T or later are
+    leak-free.
+    """
+    split = pd.read_csv(META_CSV, usecols=["market_id", "split"]).set_index("market_id")["split"]
+    ct = closed_times.set_index("market_id")["closed_time"]
+    train_ct = ct[ct.index.map(split) == "train"]
+    if train_ct.isna().any():
+        # Their rows are bounded by the inactivity rule (Pass 3) instead
+        log.warning("  %d train markets have no closedTime — left out of the cutoff",
+                    int(train_ct.isna().sum()))
+    return train_ct.max()
+
+
+def mark_pre_cutoff(df: pd.DataFrame, cutoff: pd.Timestamp) -> tuple[pd.DataFrame, int]:
+    """Relabel test rows dated before the cutoff so no model trains or scores on them."""
+    pre = (df["split"] == "test") & (df["snapshot_timestamp"] < cutoff)
+    df.loc[pre, "split"] = "test_pre_cutoff"
+    return df, int(pre.sum())
+
+
 def filter_parquet(
     input_path: pathlib.Path,
     output_path: pathlib.Path,
     closed_times: pd.DataFrame,
+    cutoff: pd.Timestamp,
 ) -> None:
     """Apply filter_snapshots to input_path in batches and write output_path (input is never modified)."""
     print(f"\n  Filtering {input_path.name} in batches ...")
@@ -236,12 +260,15 @@ def filter_parquet(
     original_rows = 0
     removed: dict[str, int] = {}
     max_ts = None
+    n_pre_cutoff = 0
     with FrameWriter(output_path) as out:
         for df in iter_frames(input_path):
             original_rows += len(df)
             df_clean, batch_removed = filter_snapshots(df, closed_times, cutoffs)
             for name, n in batch_removed.items():
                 removed[name] = removed.get(name, 0) + n
+            df_clean, n = mark_pre_cutoff(df_clean, cutoff)
+            n_pre_cutoff += n
             if len(df_clean):
                 batch_max = df_clean["snapshot_timestamp"].max()
                 max_ts = batch_max if max_ts is None else max(max_ts, batch_max)
@@ -253,6 +280,7 @@ def filter_parquet(
         print(f"  Removed — {name + ':':<15} {n:,}")
     print(f"  Total removed:         {total_removed:,} ({total_removed/max(original_rows, 1):.2%})")
     print(f"  Rows after:            {out.rows:,}")
+    print(f"  Test rows before cutoff (split=test_pre_cutoff, unused): {n_pre_cutoff:,}")
     print(f"  Max snapshot:          {max_ts}")
     print(f"  Saved → {output_path}")
 
@@ -290,15 +318,18 @@ def main():
     print(f"    Populated : {populated:,} ({populated/len(closed_times):.1%})")
     print(f"    Null      : {closed_times['closed_time'].isna().sum():,}")
 
+    cutoff = split_cutoff(closed_times)
+    print(f"\n  Train/test cutoff T (ADR-021): {cutoff}")
+
     print("\n" + "=" * 60)
     print("STEP 2 — Filter parquet files")
     print("=" * 60)
 
     # Base dataset
-    filter_parquet(PARQUET_MAIN, PARQUET_MAIN_CLEAN, closed_times)
+    filter_parquet(PARQUET_MAIN, PARQUET_MAIN_CLEAN, closed_times, cutoff)
 
     # Trends dataset (single merged file produced by merge_trends.py)
-    filter_parquet(PARQUET_TRENDS, PARQUET_TRENDS_CLEAN, closed_times)
+    filter_parquet(PARQUET_TRENDS, PARQUET_TRENDS_CLEAN, closed_times, cutoff)
 
     print("\n" + "=" * 60)
     print("  DONE")

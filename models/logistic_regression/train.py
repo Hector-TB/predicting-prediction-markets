@@ -9,7 +9,7 @@ from sklearn.compose import ColumnTransformer
 from sklearn.impute import SimpleImputer
 from sklearn.linear_model import LogisticRegression
 from sklearn.metrics import precision_recall_curve, roc_auc_score
-from sklearn.model_selection import GridSearchCV
+from sklearn.model_selection import GridSearchCV, StratifiedGroupKFold, cross_val_predict
 from sklearn.pipeline import Pipeline
 from sklearn.preprocessing import OneHotEncoder, StandardScaler
 
@@ -32,7 +32,7 @@ NUMERIC_FEATURES = [
     "days_before_close",
     "pct_lifetime_elapsed",
     "duration_days",
-    "log_volume",
+    # log_volume dropped: it is the final lifetime volume, unknown at snapshot time (ADR-018)
     "price_mean_7d", "price_volatility_7d", "price_min_7d", "price_max_7d",
     "price_change_7d", "price_range_7d", "price_trend_7d",
     "price_mean_14d", "price_volatility_14d", "price_min_14d", "price_max_14d",
@@ -96,7 +96,7 @@ def print_feature_importance(pipeline, top_n=20):
     print(f"{'─'*50}")
 
 
-def run_grid_search(pipeline, X_train, y_train, sample_weights):
+def run_grid_search(pipeline, X_train, y_train, sample_weights, groups):
     param_grid = [
         {
             "clf__C": [0.01, 0.1, 1.0, 10.0, 100.0],
@@ -113,11 +113,13 @@ def run_grid_search(pipeline, X_train, y_train, sample_weights):
         pipeline,
         param_grid,
         scoring="roc_auc",
-        cv=5,
+        # Folds split by market, so one market's snapshots never sit in both
+        # the fitting and the validation fold (ADR-021)
+        cv=StratifiedGroupKFold(n_splits=5),
         n_jobs=-1,
         verbose=1,
     )
-    grid.fit(X_train, y_train, clf__sample_weight=sample_weights)
+    grid.fit(X_train, y_train, groups=groups, clf__sample_weight=sample_weights)
     print(f"\n  Best params : {grid.best_params_}")
     print(f"  Best CV AUC : {grid.best_score_:.4f}")
     return grid.best_estimator_
@@ -145,13 +147,20 @@ def main():
 
     print("\nRunning grid search for logistic regression...")
     pipeline = build_pipeline()
-    pipeline = run_grid_search(pipeline, X_train, y_train, sample_weights)
+    groups = train["market_id"].values
+    pipeline = run_grid_search(pipeline, X_train, y_train, sample_weights, groups)
     print("  Done.")
 
-    y_prob = pipeline.predict_proba(X_test)[:, 1]
+    # Threshold from out-of-fold predictions on train — never on the test set (ADR-021)
+    y_oof = cross_val_predict(
+        pipeline, X_train, y_train, groups=groups,
+        cv=StratifiedGroupKFold(n_splits=5), method="predict_proba",
+        params={"clf__sample_weight": sample_weights}, n_jobs=-1,
+    )[:, 1]
+    optimal_threshold, best_f1 = find_optimal_threshold(y_train, y_oof)
+    print(f"\n  Threshold (max F1, out-of-fold on train): {optimal_threshold:.3f}  (F1={best_f1:.4f})")
 
-    optimal_threshold, best_f1 = find_optimal_threshold(y_test, y_prob)
-    print(f"\n  Optimal threshold (max F1): {optimal_threshold:.3f}  (F1={best_f1:.4f})")
+    y_prob = pipeline.predict_proba(X_test)[:, 1]
 
     evaluate(y_test, y_prob, label="Logistic Regression", threshold=optimal_threshold)
     evaluate_by_category(test.reset_index(drop=True), y_prob, threshold=optimal_threshold)

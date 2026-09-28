@@ -1,7 +1,7 @@
 # ADR-018: Volume Features Use Each Market's Final Lifetime Volume (Look-Ahead)
 
 **Date:** 2026-09-27  
-**Status:** Proposed — fix to be chosen before live prediction (ADR-017) and before v2 results are quoted  
+**Status:** Accepted — option 1 (drop the feature), 2026-09-28, as part of ADR-021  
 **Deciders:** Hector Thompson Baroni  
 **Code location:** `data_collection_pipeline/fetch_markets.py` (`total_volume` ← Gamma `volumeNum`), `data_collection_pipeline/build_snapshots.py` (`total_volume`, `log_volume` per snapshot), all four `models/*/train.py` (`log_volume` feature)
 
@@ -29,7 +29,13 @@ Do **option 1 first**: retrain v2 without volume features, and measure the chang
 
 For the selection effect: keep the $1k filter for training (changing it changes the dataset). For live prediction, apply it to volume-to-date and warn below $1k (ADR-017).
 
-## Consequences (if option 1 is accepted)
+## Decision (2026-09-28)
+
+Option 1: `log_volume` is removed from LR, XGBoost, RF, RF + Trends, SVM and the smoke test. The columns stay in the dataset, but no model uses them. We skipped the with/without comparison: the feature isn't available at prediction time either way.
+
+**Option 2 feasibility (checked 2026-09-28):** `data-api.polymarket.com/trades?market=<conditionId>` returns timestamped trades (sample: $36,373 summed vs $36,884 `volumeNum`). But pagination stops at offset 10,000 (about 10.5k trades), so large markets are truncated. Full history for those would need another source (e.g. the Polymarket orderbook subgraph). Tracked as a separate task in ROADMAP.
+
+## Consequences
 
 - v2 results are quoted from the no-volume models. Comparisons with the paper (which used final volume) note the difference.
 - `rescore_paper.py` gains a with/without-volume comparison for the record.

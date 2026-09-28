@@ -34,7 +34,7 @@ NUMERIC_FEATURES = [
     "days_before_close",
     "pct_lifetime_elapsed",
     "duration_days",
-    "log_volume",
+    # log_volume dropped: it is the final lifetime volume, unknown at snapshot time (ADR-018)
     "price_mean_7d", "price_volatility_7d", "price_min_7d", "price_max_7d",
     "price_change_7d", "price_range_7d", "price_trend_7d",
     "price_mean_14d", "price_volatility_14d", "price_min_14d", "price_max_14d",
@@ -193,8 +193,9 @@ def main():
     y_prob_raw = clf.predict_proba(X_test_t)[:, 1]
     y_prob_cal = iso.transform(y_prob_raw)
 
-    optimal_threshold, best_f1 = find_optimal_threshold(y_test, y_prob_cal)
-    print(f"\n  Optimal threshold (max F1 on calibrated): {optimal_threshold:.3f}  (F1={best_f1:.4f})")
+    # Threshold chosen on the calibration markets — never on the test set (ADR-021)
+    optimal_threshold, best_f1 = find_optimal_threshold(y_cal, iso.transform(p_cal_raw))
+    print(f"\n  Threshold (max F1 on calibration set): {optimal_threshold:.3f}  (F1={best_f1:.4f})")
 
     evaluate(y_test, y_prob_raw, label="XGBoost — Uncalibrated", threshold=optimal_threshold)
     evaluate(y_test, y_prob_cal, label="XGBoost — Calibrated",   threshold=optimal_threshold)
