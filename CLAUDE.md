@@ -31,8 +31,8 @@ Dataset versions: **v1** = the course-project dataset the paper used (on S3, `da
 ## Next session — start here (in order)
 
 1. ~~Check tonight's jobs~~ — done: build COMPLETE, backup on S3 verified.
-2. **Restart the Mac** (clears swap, frees disk) if not done; confirm ≥ 4 GB free.
-3. **Run the rest of the pipeline:** `python3 data_collection_pipeline/run_pipeline.py --skip-markets --skip-snapshots`. First full run of the streamed pipeline — watch for errors; nothing has been run end to end on v2 yet.
+2. ~~Restart the Mac~~ — done 2026-09-28 (18 GB free).
+3. ~~Run the rest of the pipeline~~ — done 2026-09-28 (logs `logs/pipeline_20260928_*.log`, `pipeline_trends_*`): clean parquet 2,276,215 rows — train 1,842,255 rows / 22,398 markets, test 140,546 / 4,598, `test_pre_cutoff` 293,414 (unused). Trends re-fetched through 2026-09-20 (the first attempt got HTTP 429 on 3 categories; a retry worked).
 4. **Publish v2:** `python3 data/sync.py publish v2 --parent v1 --notes "…"` (dry-run first); commit `data/manifests/v2.json`; push.
 5. ~~Decide ADR-018~~ — done 2026-09-28: `log_volume` dropped, split recomputed by resolution time (ADR-021; meta already updated, T = 2026-07-01). Pipeline bugs from the pre-v2 review fixed (commit c31d971).
 6. **Train on v2**, one at a time: LR and XGBoost (each ± `--trends`), RF, RF + Trends. Only if a run is killed (exit 137) apply memory fixes — user prefers no preemptive optimisation.
