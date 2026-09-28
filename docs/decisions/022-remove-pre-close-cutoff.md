@@ -45,7 +45,7 @@ The price rule targets the actual problem (near-certain rows) directly. The fixe
 
 - v3 will have more rows per market near resolution. Class balance and the market baseline shift again, so recompute both; don't compare raw metrics with v2 without noting it.
 - Comparing v2 and v3 models (same test cutoff rule, ADR-021) shows whether the late rows help. Report metrics broken down by `days_before_close` bucket as well.
-- A full rebuild re-fetches price history for ~45k markets. The last build ran at ~1.9 s per market, so a sequential rebuild takes about a day.
+- A full rebuild re-fetches price history for ~45k markets. `build_snapshots.py` now runs 4 worker processes (`--workers`). Measured on 200 markets: 0.91 s per market sequentially vs 0.375 s with 4 workers, with output identical to the sequential code. That makes a full rebuild about 5 hours instead of about 12. No CLOB request was refused at up to 16 concurrent requests.
 
 ## Related ADRs
 

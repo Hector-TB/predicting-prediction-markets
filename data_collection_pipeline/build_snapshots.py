@@ -27,6 +27,7 @@ import os
 import sys
 from datetime import timedelta
 from pathlib import Path
+from concurrent.futures import ProcessPoolExecutor
 from typing import Optional
 
 # ─────────────────────────────────────────────
@@ -49,6 +50,7 @@ CUTOFF_BEFORE_CLOSE = 0         # days before endDate to stop snapshots (was 14;
 ROLLING_WINDOWS     = [7, 14]   # rolling feature windows in days
 
 SLEEP_BETWEEN_CALLS = 0.15
+WORKERS             = 4         # processes; 2 physical cores here, fetch waits overlap
 MAX_RETRIES         = 5
 RETRY_BACKOFF       = 5         # seconds before first retry (doubles each attempt)
 
@@ -200,6 +202,31 @@ def compute_snapshots(market: pd.Series, price_df: pd.DataFrame,
     return pd.DataFrame(rows) if rows else None
 
 
+def process_market(market: pd.Series, closed_time) -> tuple[str, Optional[pd.DataFrame], Optional[str]]:
+    """Fetch + compute one market (runs in a worker process).
+    Returns (status, snapshots or None, error or None); status is one of
+    ok / no_history / no_snapshots / failed."""
+    token = market["clob_token_id"]
+    if pd.isna(token) or not str(token).strip():
+        return "no_history", None, None
+    try:
+        price_df = fetch_price_history(token)
+    except FetchError as e:
+        return "failed", None, str(e)
+    finally:
+        time.sleep(SLEEP_BETWEEN_CALLS)   # per worker: keeps the request rate modest
+    if price_df is None:
+        return "no_history", None, None
+
+    snap_df = compute_snapshots(market, price_df, closed_time)
+    if snap_df is None or snap_df.empty:
+        return "no_snapshots", None, None
+    snap_df["split"]    = market["split"]
+    snap_df["category"] = market["category"]
+    snap_df["question"] = market["question"]
+    return "ok", snap_df, None
+
+
 # ─────────────────────────────────────────────
 # HELPERS
 # ─────────────────────────────────────────────
@@ -253,7 +280,7 @@ def append_to_dataset(snap_df: pd.DataFrame, first_write: bool):
 # MAIN
 # ─────────────────────────────────────────────
 
-def main(full: bool = False):
+def main(full: bool = False, workers: int = WORKERS):
     check_build_settings(full)
     print("\n" + "█" * 60)
     print("  POLYMARKET — BUILD SNAPSHOT DATASET")
@@ -302,49 +329,39 @@ def main(full: bool = False):
     n_remaining  = len(remaining_df)
     print(f"  {len(processed_ids):,} already done, {n_remaining:,} remaining\n")
 
-    for i, (_, market) in enumerate(remaining_df.iterrows()):
-        market_id = market["market_id"]
+    # Each worker process fetches and computes one market at a time; only this
+    # process writes the CSV, one whole market per append, so resume still works.
+    markets = [row for _, row in remaining_df.iterrows()]
+    cts     = [closed_times.get(m["market_id"]) for m in markets]
+    print(f"  Using {workers} worker processes\n")
 
-        if i % 50 == 0:
-            print(f"  [{i/n_remaining*100:5.1f}%] {i}/{n_remaining} remaining | "
-                  f"ok={n_success} no_hist={n_no_history} "
-                  f"no_snap={n_no_snapshots} failed={n_fetch_failed} rows={total_rows:,}")
+    with ProcessPoolExecutor(max_workers=workers) as ex:
+        results = ex.map(process_market, markets, cts, chunksize=4)
+        for i, (market, (status, snap_df, err)) in enumerate(zip(markets, results)):
+            market_id = market["market_id"]
 
-        if pd.isna(market["clob_token_id"]) or not str(market["clob_token_id"]).strip():
-            n_no_history += 1
-            continue
-        try:
-            price_df = fetch_price_history(market["clob_token_id"])
-        except FetchError as e:
-            # Not added to the CSV, so the next run retries it
-            n_fetch_failed += 1
-            log.warning("  fetch failed for %s: %s", market_id, e)
-            continue
-        time.sleep(SLEEP_BETWEEN_CALLS)
+            if i % 50 == 0:
+                print(f"  [{i/n_remaining*100:5.1f}%] {i}/{n_remaining} remaining | "
+                      f"ok={n_success} no_hist={n_no_history} "
+                      f"no_snap={n_no_snapshots} failed={n_fetch_failed} rows={total_rows:,}",
+                      flush=True)
 
-        if price_df is None:
-            n_no_history += 1
-            processed_ids.add(market_id)
-            continue
+            if status == "failed":
+                # Not added to the CSV, so the next run retries it
+                n_fetch_failed += 1
+                log.warning("  fetch failed for %s: %s", market_id, err)
+                continue
+            if status == "no_history":
+                n_no_history += 1
+                continue
+            if status == "no_snapshots":
+                n_no_snapshots += 1
+                continue
 
-        snap_df = compute_snapshots(market, price_df, closed_times.get(market_id))
-
-        if snap_df is None or snap_df.empty:
-            n_no_snapshots += 1
-            processed_ids.add(market_id)
-            continue
-
-        snap_df["split"]    = market["split"]
-        snap_df["category"] = market["category"]
-        snap_df["question"] = market["question"]
-
-        append_to_dataset(snap_df, first_write)
-        first_write = False
-        total_rows += len(snap_df)
-        n_success  += 1
-        processed_ids.add(market_id)
-
-
+            append_to_dataset(snap_df, first_write)
+            first_write = False
+            total_rows += len(snap_df)
+            n_success  += 1
 
     print(f"\n{'=' * 60}")
     print(f"  COMPLETE")
@@ -378,7 +395,9 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Build the snapshot dataset CSV")
     parser.add_argument("--full", action="store_true",
                         help="Rebuild every market, ignoring the merged parquet (ADR-022)")
+    parser.add_argument("--workers", type=int, default=WORKERS,
+                        help=f"parallel worker processes (default {WORKERS})")
     args = parser.parse_args()
-    n_failed = main(full=args.full)
+    n_failed = main(full=args.full, workers=args.workers)
     # Non-zero so run_pipeline.py stops before merging an incomplete build
     sys.exit(1 if n_failed else 0)
