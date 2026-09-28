@@ -1,6 +1,6 @@
 # CLAUDE.md — Predicting Prediction Markets
 
-<!-- When compacting: preserve the active data split (train=80%/test=20% temporal at market level), current ADR count (ADR-001 through ADR-019), and any files modified this session. -->
+<!-- When compacting: preserve the active data split (train=80%/test=20% temporal at market level), current ADR count (ADR-001 through ADR-020), and any files modified this session. -->
 
 This file is read by Claude Code at the start of every session. Keep it under 200 lines.
 
