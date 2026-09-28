@@ -30,17 +30,17 @@ Dataset versions: **v1** = the course-project dataset the paper used (on S3, `da
 
 ## Next session — start here (in order)
 
-1. ~~Check tonight's jobs~~ — done: build COMPLETE, backup on S3 verified.
-2. ~~Restart the Mac~~ — done 2026-09-28 (18 GB free).
-3. ~~Run the rest of the pipeline~~ — done 2026-09-28 (logs `logs/pipeline_20260928_*.log`, `pipeline_trends_*`): clean parquet 2,276,215 rows — train 1,842,255 rows / 22,398 markets, test 140,546 / 4,598, `test_pre_cutoff` 293,414 (unused). Trends re-fetched through 2026-09-20 (the first attempt got HTTP 429 on 3 categories; a retry worked).
-4. **Publish v2:** `python3 data/sync.py publish v2 --parent v1 --notes "…"` (dry-run first); commit `data/manifests/v2.json`; push.
-5. ~~Decide ADR-018~~ — done 2026-09-28: `log_volume` dropped, split recomputed by resolution time (ADR-021; meta already updated, T = 2026-07-01). Pipeline bugs from the pre-v2 review fixed (commit c31d971).
-6. **Train on v2**, one at a time: LR and XGBoost (each ± `--trends`), RF, RF + Trends. Only if a run is killed (exit 137) apply memory fixes — user prefers no preemptive optimisation.
-6b. **Build v3 (ADR-022):** `python3 data_collection_pipeline/run_pipeline.py --skip-markets --rebuild-snapshots` (~5–7 h, 4 workers). The meta was refreshed from Gamma on 2026-09-28 (ADR-023: 45,130 markets; 14,886 estimated date rows fixed, 13 too-short markets dropped). The v2 snapshot CSV is at `data/polymarket_ml_dataset.v2.csv`. Then publish v3 --parent v2, train, and compare with v2 (including by `days_before_close`).
-7. **Re-score:** `python3 analysis/rescore_paper.py --out docs/paper/rescore_v2_data.md` — the key question: does the paper's gain over the market hold on v2? Then update the README results section (neutral tone — see memory).
-8. **Refresh Supabase with v2:** `python3 db/load_parquet.py` (tags model runs `clean_v2`).
-9. **Merge** `pipeline-leakage-and-categories` → `main` (or open a PR) once the v2 run works.
-10. **Then build:** the one-command refresh with automatic S3 staging backups + model releases (ROADMAP 4b, ADR-019) and the fixed incremental fetch + coverage check (ADR-020) — don't run a plain incremental `fetch_markets.py` before that fix, then the site prerequisites (ROADMAP 5: shared feature function, DB migration for the live track record) and the API/site (`docs/design/search-and-predict.md`).
+State at end of 2026-09-28: v2 published (S3 `datasets/v2/`, LATEST). The v3 rebuild (ADR-022, meta refreshed per ADR-023) ran 12:05–~18:00. `scripts/stage_backup.py` (log `logs/stage_backup_v3.log`) waited for the pipeline and the coverage check, then backed everything up to `s3://<bucket>/staging/2026-09-28-v3/` with size checks. v3 is **not published yet**.
+
+1. **Check last night's jobs:** end of `logs/pipeline_v3_20260928_1205.log` (`PIPELINE COMPLETE`?), `logs/stage_backup_v3.log` (`DONE`, no `SIZE MISMATCH`), and the latest `logs/coverage_run_*.log`.
+2. **Coverage result (ADR-020):** if any markets were `MISSED` (list in `logs/coverage_*.csv`), work out why and fetch them *before* publishing v3. `new` = closed after the 2026-09-25 fetch (the next fetch adds them); `out of scope` = Gamma startDate before 2023.
+3. **Full quality check on v3** (same checks as the mid-build ones: invariants, window vs meta/closedTime, v2 comparison on shared rows), then the clean-parquet split summary (train / test / test_pre_cutoff).
+4. **Publish v3:** `python3 data/sync.py publish v3 --parent v2 --notes "…"` (dry run first); commit the manifest. Then delete `data/polymarket_ml_dataset.v2.csv` and `staging/2026-09-28-v3/` (optional).
+5. **Train on v2 and v3**, one at a time: LR and XGBoost (each ± `--trends`), RF, RF + Trends. Only apply memory fixes if a run is killed (exit 137).
+6. **Re-score:** `python3 analysis/rescore_paper.py` on v2 and v3; compare, including by `days_before_close` bucket. Then update the README results (neutral tone, see memory).
+7. **Refresh Supabase:** `python3 db/load_parquet.py` (now upserts).
+8. **Merge** `pipeline-leakage-and-categories` → `main` (or open a PR).
+9. **Then build:** the one-command refresh + model releases (ROADMAP 4b, ADR-019), with `coverage_check.py` and `meta_checks.py` as gates; the fixed incremental fetch (ADR-020; don't run a plain incremental `fetch_markets.py` before it); then the site prerequisites (ROADMAP 5) and the API/site. Separate tasks: Trends rework, volume to date (ROADMAP 4c).
 
 ## Key conventions
 
