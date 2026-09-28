@@ -150,8 +150,11 @@ def _date_windows(start: str, end: str, months: int = 1):
         current = wend
 
 
-def _fetch_window(start_date: str, end_date: str) -> list[dict]:
+def _fetch_window(start_date: str, end_date: str, by: str = "start") -> list[dict]:
     """Cursor-paginate one date window via /markets/keyset (ADR-013).
+
+    by="start" windows on Gamma's startDate (the fetch); by="end" on endDate
+    (the independent route used by scripts/coverage_check.py, ADR-020).
 
     Raises RuntimeError if a page still fails after MAX_RETRIES — a skipped
     page would leave a gap the incremental watermark never revisits.
@@ -164,8 +167,8 @@ def _fetch_window(start_date: str, end_date: str) -> list[dict]:
             "closed":         "true",
             "limit":          MARKET_FETCH_LIMIT,
             "volume_num_min": VOLUME_NUM_MIN,
-            "start_date_min": start_date,
-            "start_date_max": end_date,
+            f"{by}_date_min": start_date,
+            f"{by}_date_max": end_date,
         }
         if cursor:
             params["after_cursor"] = cursor
