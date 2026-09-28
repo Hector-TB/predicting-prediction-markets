@@ -374,16 +374,24 @@ def main(full: bool = False, workers: int = WORKERS):
     print(f"  Total rows:          {total_rows:>7,}")
 
     if OUTPUT_DATASET.exists():
-        df = pd.read_csv(OUTPUT_DATASET)
+        # Read in chunks: a full rebuild is several GB once loaded (ADR-022)
+        n_rows, yes, split_rows, ids, nan_counts = 0, 0, {}, set(), None
+        for df in pd.read_csv(OUTPUT_DATASET, chunksize=500_000, low_memory=False):
+            n_rows += len(df)
+            yes    += int(df["outcome"].sum())
+            ids.update(df["market_id"].unique())
+            for k, v in df["split"].value_counts().items():
+                split_rows[k] = split_rows.get(k, 0) + int(v)
+            c = df.isnull().sum()
+            nan_counts = c if nan_counts is None else nan_counts.add(c, fill_value=0)
         print(f"\nDataset validation:")
-        print(f"  Rows:                    {len(df):,}")
-        print(f"  Markets:                 {df['market_id'].nunique():,}")
-        print(f"  Outcome: YES={df['outcome'].mean():.1%} | NO={(1-df['outcome'].mean()):.1%}")
-        print(f"  Snapshots/market (mean): {len(df)/df['market_id'].nunique():.1f}")
-        print(f"  Train: {(df['split']=='train').sum():,} | Test: {(df['split']=='test').sum():,}")
-        nan_counts = df.isnull().sum()
-        if nan_counts.any():
-            print(f"\n  NaN counts:\n{nan_counts[nan_counts > 0].to_string()}")
+        print(f"  Rows:                    {n_rows:,}")
+        print(f"  Markets:                 {len(ids):,}")
+        print(f"  Outcome: YES={yes / n_rows:.1%} | NO={1 - yes / n_rows:.1%}")
+        print(f"  Snapshots/market (mean): {n_rows / len(ids):.1f}")
+        print(f"  Train: {split_rows.get('train', 0):,} | Test: {split_rows.get('test', 0):,}")
+        if nan_counts is not None and nan_counts.any():
+            print(f"\n  NaN counts:\n{nan_counts[nan_counts > 0].astype(int).to_string()}")
 
     if n_fetch_failed:
         print(f"\n  {n_fetch_failed:,} markets failed to fetch — re-run to retry them.")
