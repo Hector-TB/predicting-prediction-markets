@@ -16,20 +16,31 @@ The course paper (research questions, methods, reported results) is `docs/paper/
 
 ---
 
-## Current state (as of 2026-09-27)
+## Current state (as of 2026-09-27, night)
 
-Dataset versions: **v1** = the course-project dataset the paper used (20,948 markets, still on S3); **v2** = the ADR-013/014 rebuild (45,143 markets fetched, in progress).
+Dataset versions: **v1** = the course-project dataset the paper used (on S3, `datasets/v1/`, frozen); **v2** = the ADR-013/014 rebuild (45,143 markets fetched, not yet published).
 
-- Phase: productionization — rebuilding the dataset, then retraining and re-scoring the paper's results
-- Data: the ADR-013 full re-fetch grew the market list to 45,143 (all LLM-categorised); `build_snapshots.py` is rebuilding snapshots for the ~20k new markets. After it: `run_pipeline.py --skip-markets --skip-snapshots`, then `python data/sync.py publish v2 --parent v1 --notes "…"`. S3 holds v1 (immutable, `datasets/v1/`); datasets are versioned per ADR-016 — never overwrite, publish a new version
-- Pipeline steps stream in batches (`data_collection_pipeline/stream_parquet.py`), so they fit in 8 GB of RAM
-- Models: LR, XGBoost (`--trends` for the Trends variant), RF, RF + Trends, SVM — all still trained on the v1 dataset; retrain after the rebuild, then `python analysis/rescore_paper.py`
-- Course paper results: RQ1 gains reproduce and are significant with market-level CIs; the paper's trading ROI is overstated (ADR-015, `docs/paper/README.md`)
-- Database: Supabase (free tier); schema in `db/migrations/001_initial_schema.sql`; 20,948 markets + 9 model_runs loaded (not yet refreshed)
-- Work in progress is on branch `pipeline-leakage-and-categories`
+- Snapshot rebuild (`build_snapshots.py`, PID 38517) was ~89% done at 21:10 and expected to finish ~22:00–22:30. Output: `data/polymarket_ml_dataset.csv` (resumable — rerun the same command if it stopped early)
+- `logs/stage_backup.py` (PID 71724) waits for that build to exit, then uploads the CSV, meta, closed-times cache, fetch cache and build logs to `s3://<bucket>/staging/2026-09-27/` (a backup, **not** a dataset version). Log: `logs/stage_backup.log` (ends with `DONE`)
+- All 45,143 markets are LLM-categorised (`data/polymarket_markets_meta.csv`); backups `data/*.pre_categorize*.bak.csv` can be deleted after v2 is published
+- Supabase (free tier; was paused, restored 2026-09-27): still holds v1 — 20,948 markets, 1,458 trends, 9 model_runs, empty snapshots/predictions. Re-check tables after any unpause before assuming data loss
+- S3 bucket versioning enabled 2026-09-27; `sync.py push` removed (ADR-016)
+- Work is on branch `pipeline-leakage-and-categories` (pushed to GitHub, not merged to `main`)
+- Machine: 8 GB RAM, disk often < 5 GB free — restart before heavy steps; run models one at a time
 - No API, no frontend yet
 
----
+## Next session — start here (in order)
+
+1. **Check tonight's jobs:** `tail logs/build_snapshots_*.log` (latest) — did it finish without a traceback? `tail logs/stage_backup.log` — does it end with `DONE` and every file `OK`? If the build stopped early, rerun `python3 -u data_collection_pipeline/build_snapshots.py` (it resumes), then re-upload the backup.
+2. **Restart the Mac** (clears swap, frees disk) if not done; confirm ≥ 4 GB free.
+3. **Run the rest of the pipeline:** `python3 data_collection_pipeline/run_pipeline.py --skip-markets --skip-snapshots`. First full run of the streamed pipeline — watch for errors; nothing has been run end to end on v2 yet.
+4. **Publish v2:** `python3 data/sync.py publish v2 --parent v1 --notes "…"` (dry-run first); commit `data/manifests/v2.json`; push.
+5. **Decide ADR-018 with the user** (volume features use final lifetime volume = look-ahead). Recommendation: train with and without `log_volume`, compare with `rescore_paper.py`, then drop it.
+6. **Train on v2**, one at a time: LR and XGBoost (each ± `--trends`), RF, RF + Trends. Only if a run is killed (exit 137) apply memory fixes — user prefers no preemptive optimisation.
+7. **Re-score:** `python3 analysis/rescore_paper.py --out docs/paper/rescore_v2_data.md` — the key question: does the paper's gain over the market hold on v2? Then update the README results section (neutral tone — see memory).
+8. **Refresh Supabase with v2:** `python3 db/load_parquet.py` (tags model runs `clean_v2`).
+9. **Merge** `pipeline-leakage-and-categories` → `main` (or open a PR) once the v2 run works.
+10. **Then build:** the one-command refresh with automatic S3 staging backups + model releases (ROADMAP 4b, ADR-019), then the site prerequisites (ROADMAP 5: ADR-018, shared feature function, DB migration for the live track record) and the API/site (`docs/design/search-and-predict.md`).
 
 ## Key conventions
 
