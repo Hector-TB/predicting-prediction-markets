@@ -17,6 +17,7 @@ held in memory.
 Run after build_snapshots.py, before training any models.
 """
 
+import argparse
 import logging
 import os
 import sys
@@ -109,7 +110,7 @@ def add(total: dict, counts: dict) -> None:
         total[k] = total.get(k, 0) + v
 
 
-def main():
+def main(replace: bool = False):
     print(f"\n{'█' * 60}")
     print(f"  POLYMARKET — FIX DATASET")
     print(f"{'█' * 60}")
@@ -142,7 +143,9 @@ def main():
     try:
         with FrameWriter(parquet_path) as out:
             # Existing parquet rows first, minus markets the CSV supersedes
-            if parquet_path.exists():
+            if parquet_path.exists() and replace:
+                log.info("  --replace: the CSV is a full rebuild — existing parquet rows discarded")
+            elif parquet_path.exists():
                 kept = 0
                 for df in iter_frames(parquet_path):
                     df = df[~df["market_id"].isin(csv_ids)]
@@ -186,4 +189,7 @@ def main():
 
 if __name__ == "__main__":
     logging.basicConfig(level=logging.INFO, format="%(message)s")
-    main()
+    parser = argparse.ArgumentParser(description="Clean the snapshot CSV and merge it into the parquet")
+    parser.add_argument("--replace", action="store_true",
+                        help="The CSV is a full rebuild: discard the existing parquet instead of merging")
+    main(replace=parser.parse_args().replace)

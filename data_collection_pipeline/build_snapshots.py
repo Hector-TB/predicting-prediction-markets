@@ -8,13 +8,23 @@ dataset with rolling price features.
 Output: polymarket_ml_dataset.csv
 
 Run fetch_markets.py first.
+
+    python data_collection_pipeline/build_snapshots.py          # new markets only
+    python data_collection_pipeline/build_snapshots.py --full   # rebuild every market
+
+--full ignores the merged parquet and rebuilds all markets into the CSV
+(resumable). It refuses to resume from a CSV built with different settings.
 """
 
+import argparse
+import json
+import logging
 import requests
 import pandas as pd
 import numpy as np
 import time
 import os
+import sys
 from datetime import timedelta
 from pathlib import Path
 from typing import Optional
@@ -35,13 +45,33 @@ CLOB_URL            = "https://clob.polymarket.com"
 MIN_PRICE_OBS       = 20        # minimum price observations to use a market
 SNAPSHOT_INTERVAL_H = 12        # hours between snapshots
 MIN_HISTORY_DAYS    = 14        # burn-in before first snapshot
-CUTOFF_BEFORE_CLOSE = 14        # days before endDate to stop snapshots
+CUTOFF_BEFORE_CLOSE = 0         # days before endDate to stop snapshots (was 14; ADR-022)
 ROLLING_WINDOWS     = [7, 14]   # rolling feature windows in days
 
 SLEEP_BETWEEN_CALLS = 0.15
+MAX_RETRIES         = 5
+RETRY_BACKOFF       = 5         # seconds before first retry (doubles each attempt)
 
 INPUT_META          = DATA_DIR / "polymarket_markets_meta.csv"
 OUTPUT_DATASET      = DATA_DIR / "polymarket_ml_dataset.csv"
+BUILD_SETTINGS      = DATA_DIR / "polymarket_ml_dataset.csv.build.json"
+CLOSED_TIMES_CSV    = DATA_DIR / "market_closed_times.csv"
+
+# Settings that change which rows a market gets; a resumed build must match them
+SETTINGS = {
+    "snapshot_interval_h": SNAPSHOT_INTERVAL_H,
+    "min_history_days":    MIN_HISTORY_DAYS,
+    "cutoff_before_close": CUTOFF_BEFORE_CLOSE,
+    "rolling_windows":     ROLLING_WINDOWS,
+    "min_price_obs":       MIN_PRICE_OBS,
+}
+
+log = logging.getLogger(__name__)
+
+
+class FetchError(Exception):
+    """The price history could not be fetched (network / server error), as
+    opposed to the market genuinely having no history."""
 
 
 # ─────────────────────────────────────────────
@@ -51,42 +81,52 @@ OUTPUT_DATASET      = DATA_DIR / "polymarket_ml_dataset.csv"
 def fetch_price_history(clob_token_id: str) -> Optional[pd.DataFrame]:
     """
     Fetch full price history for a YES token from CLOB API.
-    Returns DataFrame(timestamp, price) sorted ascending, or None.
+    Returns DataFrame(timestamp, price) sorted ascending, or None if the market
+    has no (or too little) history. Raises FetchError if the request keeps
+    failing, so a network blip is never mistaken for "no history".
     """
-    try:
-        r = requests.get(
-            f"{CLOB_URL}/prices-history",
-            params={"market": clob_token_id, "interval": "max", "fidelity": 720},
-            timeout=20,
-        )
-        r.raise_for_status()
-        history = r.json().get("history", [])
-        if not history:
-            return None
+    for attempt in range(1, MAX_RETRIES + 1):
+        try:
+            r = requests.get(
+                f"{CLOB_URL}/prices-history",
+                params={"market": clob_token_id, "interval": "max", "fidelity": 720},
+                timeout=20,
+            )
+            r.raise_for_status()
+            history = r.json().get("history", [])
+            break
+        except Exception as e:
+            if attempt == MAX_RETRIES:
+                raise FetchError(str(e)) from e
+            time.sleep(RETRY_BACKOFF * 2 ** (attempt - 1))
 
-        df = pd.DataFrame(history)
-        df = df.rename(columns={"t": "timestamp", "p": "price"})
-        df["timestamp"] = pd.to_datetime(df["timestamp"], unit="s", utc=True)
-        df["price"]     = pd.to_numeric(df["price"], errors="coerce")
-        df = df.dropna(subset=["price"]).sort_values("timestamp").reset_index(drop=True)
-
-        return df if len(df) >= MIN_PRICE_OBS else None
-
-    except Exception:
+    if not history:
         return None
+
+    df = pd.DataFrame(history)
+    df = df.rename(columns={"t": "timestamp", "p": "price"})
+    df["timestamp"] = pd.to_datetime(df["timestamp"], unit="s", utc=True)
+    df["price"]     = pd.to_numeric(df["price"], errors="coerce")
+    df = df.dropna(subset=["price"]).sort_values("timestamp").reset_index(drop=True)
+
+    return df if len(df) >= MIN_PRICE_OBS else None
 
 
 # ─────────────────────────────────────────────
 # COMPUTE SNAPSHOTS
 # ─────────────────────────────────────────────
 
-def compute_snapshots(market: pd.Series, price_df: pd.DataFrame) -> Optional[pd.DataFrame]:
+def compute_snapshots(market: pd.Series, price_df: pd.DataFrame,
+                      closed_time: Optional[pd.Timestamp] = None) -> Optional[pd.DataFrame]:
     """
     Generate one row per 12-hour snapshot for a market.
 
     Window:
-      snap_start = createdAt + MIN_HISTORY_DAYS   (burn-in for feature stability)
-      snap_end   = endDate   - CUTOFF_BEFORE_CLOSE (no peeking near resolution)
+      snap_start = createdAt + MIN_HISTORY_DAYS    (burn-in for feature stability)
+      snap_end   = endDate   - CUTOFF_BEFORE_CLOSE (ADR-022: 0 — near-certain rows
+                   are removed by fix_leakage.py's price rule instead)
+                   and no later than closed_time when known: fix_leakage.py drops
+                   post-close rows anyway, so don't build them
 
     All features use price history strictly BEFORE each snapshot timestamp.
     """
@@ -97,6 +137,8 @@ def compute_snapshots(market: pd.Series, price_df: pd.DataFrame) -> Optional[pd.
 
     snap_start = start + timedelta(days=MIN_HISTORY_DAYS)
     snap_end   = end   - timedelta(days=CUTOFF_BEFORE_CLOSE)
+    if closed_time is not None and not pd.isna(closed_time):
+        snap_end = min(snap_end, closed_time)
 
     if snap_start >= snap_end:
         return None
@@ -162,11 +204,34 @@ def compute_snapshots(market: pd.Series, price_df: pd.DataFrame) -> Optional[pd.
 # HELPERS
 # ─────────────────────────────────────────────
 
-def load_processed_ids() -> set:
+def check_build_settings(full: bool) -> None:
+    """Refuse to resume a CSV built with different settings or mode (e.g. an
+    incremental CSV under --full, or the old 14-day cutoff)."""
+    wanted = {**SETTINGS, "full": full}
+    if OUTPUT_DATASET.exists():
+        found = json.loads(BUILD_SETTINGS.read_text()) if BUILD_SETTINGS.exists() else None
+        if found != wanted:
+            raise SystemExit(
+                f"ERROR: {OUTPUT_DATASET.name} was built with settings {found}, not {wanted}.\n"
+                f"Move or delete it (and {BUILD_SETTINGS.name}) before building."
+            )
+    else:
+        BUILD_SETTINGS.write_text(json.dumps(wanted, indent=2) + "\n")
+
+
+def load_closed_times() -> dict:
+    if not CLOSED_TIMES_CSV.exists():
+        return {}
+    ct = pd.read_csv(CLOSED_TIMES_CSV).dropna(subset=["closed_time"])
+    return dict(zip(ct["market_id"], pd.to_datetime(ct["closed_time"], utc=True, format="mixed")))
+
+
+def load_processed_ids(full: bool = False) -> set:
     """Resume support — union of markets in the in-progress CSV and the merged parquet.
 
     The CSV only holds markets from the current (possibly interrupted) run, so it
     must never replace the parquet as the source of already-processed IDs.
+    With full=True the parquet is ignored: every market is rebuilt.
     """
     ids = set()
     if OUTPUT_DATASET.exists():
@@ -174,7 +239,7 @@ def load_processed_ids() -> set:
         print(f"  Resuming — {len(csv_ids):,} already-processed markets in CSV")
         ids |= csv_ids
     parquet_path = OUTPUT_DATASET.with_suffix(".parquet")
-    if parquet_path.exists():
+    if parquet_path.exists() and not full:
         pq_ids = set(pd.read_parquet(parquet_path, columns=["market_id"])["market_id"].unique())
         print(f"  Resuming — {len(pq_ids):,} already-processed markets in parquet")
         ids |= pq_ids
@@ -188,7 +253,8 @@ def append_to_dataset(snap_df: pd.DataFrame, first_write: bool):
 # MAIN
 # ─────────────────────────────────────────────
 
-def main():
+def main(full: bool = False):
+    check_build_settings(full)
     print("\n" + "█" * 60)
     print("  POLYMARKET — BUILD SNAPSHOT DATASET")
     print("█" * 60 + "\n")
@@ -196,7 +262,7 @@ def main():
     # Load markets meta
     if not INPUT_META.exists():
         print(f"ERROR: {INPUT_META} not found. Run fetch_markets.py first.")
-        return
+        sys.exit(1)
 
     markets_df = pd.read_csv(INPUT_META)
     markets_df["start_date"] = pd.to_datetime(markets_df["start_date"], format="ISO8601", utc=True)
@@ -213,7 +279,9 @@ def main():
     print("Fetching price history + computing snapshots")
     print("=" * 60)
 
-    processed_ids  = load_processed_ids()
+    processed_ids  = load_processed_ids(full)
+    closed_times   = load_closed_times()
+    print(f"  closedTime known for {len(closed_times):,} markets (snapshots stop there)")
     n_markets      = len(markets_df)
     first_write    = not OUTPUT_DATASET.exists()
 
@@ -228,6 +296,7 @@ def main():
 
     n_no_history   = 0
     n_no_snapshots = 0
+    n_fetch_failed = 0
 
     remaining_df = markets_df[~markets_df["market_id"].isin(processed_ids)].reset_index(drop=True)
     n_remaining  = len(remaining_df)
@@ -239,9 +308,18 @@ def main():
         if i % 50 == 0:
             print(f"  [{i/n_remaining*100:5.1f}%] {i}/{n_remaining} remaining | "
                   f"ok={n_success} no_hist={n_no_history} "
-                  f"no_snap={n_no_snapshots} rows={total_rows:,}")
+                  f"no_snap={n_no_snapshots} failed={n_fetch_failed} rows={total_rows:,}")
 
-        price_df = fetch_price_history(market["clob_token_id"])
+        if pd.isna(market["clob_token_id"]) or not str(market["clob_token_id"]).strip():
+            n_no_history += 1
+            continue
+        try:
+            price_df = fetch_price_history(market["clob_token_id"])
+        except FetchError as e:
+            # Not added to the CSV, so the next run retries it
+            n_fetch_failed += 1
+            log.warning("  fetch failed for %s: %s", market_id, e)
+            continue
         time.sleep(SLEEP_BETWEEN_CALLS)
 
         if price_df is None:
@@ -249,7 +327,7 @@ def main():
             processed_ids.add(market_id)
             continue
 
-        snap_df = compute_snapshots(market, price_df)
+        snap_df = compute_snapshots(market, price_df, closed_times.get(market_id))
 
         if snap_df is None or snap_df.empty:
             n_no_snapshots += 1
@@ -275,6 +353,7 @@ def main():
     print(f"  Successful:          {n_success:>7,}")
     print(f"  No/sparse history:   {n_no_history:>7,}")
     print(f"  No valid snapshots:  {n_no_snapshots:>7,}")
+    print(f"  Fetch failed:        {n_fetch_failed:>7,}  (retried on the next run)")
     print(f"  Total rows:          {total_rows:>7,}")
 
     if OUTPUT_DATASET.exists():
@@ -289,6 +368,17 @@ def main():
         if nan_counts.any():
             print(f"\n  NaN counts:\n{nan_counts[nan_counts > 0].to_string()}")
 
+    if n_fetch_failed:
+        print(f"\n  {n_fetch_failed:,} markets failed to fetch — re-run to retry them.")
+    return n_fetch_failed
+
 
 if __name__ == "__main__":
-    main()
+    logging.basicConfig(level=logging.INFO, format="%(message)s")
+    parser = argparse.ArgumentParser(description="Build the snapshot dataset CSV")
+    parser.add_argument("--full", action="store_true",
+                        help="Rebuild every market, ignoring the merged parquet (ADR-022)")
+    args = parser.parse_args()
+    n_failed = main(full=args.full)
+    # Non-zero so run_pipeline.py stops before merging an incomplete build
+    sys.exit(1 if n_failed else 0)

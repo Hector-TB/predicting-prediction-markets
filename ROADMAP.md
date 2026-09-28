@@ -41,6 +41,7 @@ fetch (by scheduled end date, ADR-020) → snapshots → pipeline → coverage c
 the previous release.
 
 ### 4c. Feature research (separate tasks)
+- **Dataset v3 (ADR-022):** no 14-day pre-close cutoff; full snapshot rebuild. Compare v2 vs v3 models.
 - **Rework Google Trends.** The current setup is weak: category-level keywords, one 0–100 scale
   over the whole period (the scale depends on later peaks), weekly granularity. Revisit before relying on it
   (ADR-009 amendment lists the known issues).

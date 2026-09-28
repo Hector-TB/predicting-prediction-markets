@@ -112,7 +112,13 @@ def fetch_closed_times(market_ids: list[str]) -> pd.DataFrame:
     ]
     result = pd.DataFrame(rows)
     result["closed_time"] = pd.to_datetime(result["closed_time"], utc=True, format="mixed", errors="coerce")
-    result.to_csv(CLOSED_TIMES_CSV, index=False)
+    # Keep cached markets outside this request, so the cache never shrinks
+    requested = set(market_ids)
+    others = pd.DataFrame(
+        [{"market_id": m, "closed_time": t} for m, t in cached.items() if m not in requested])
+    if len(others):
+        others["closed_time"] = pd.to_datetime(others["closed_time"], utc=True, format="mixed", errors="coerce")
+    pd.concat([result, others], ignore_index=True).to_csv(CLOSED_TIMES_CSV, index=False)
     log.info("  Saved %s", CLOSED_TIMES_CSV.name)
     return result
 

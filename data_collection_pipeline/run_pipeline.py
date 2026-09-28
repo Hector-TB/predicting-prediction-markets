@@ -39,10 +39,10 @@ log = logging.getLogger(__name__)
 SEP = "─" * 60
 
 
-def run(script: Path, label: str) -> bool:
+def run(script: Path, label: str, *args: str) -> bool:
     log.info("\n%s\n  STEP: %s\n%s", SEP, label, SEP)
     t0     = time.time()
-    result = subprocess.run([sys.executable, str(script)], cwd=ROOT)
+    result = subprocess.run([sys.executable, str(script), *args], cwd=ROOT)
     elapsed = time.time() - t0
     if result.returncode != 0:
         log.error("  FAILED (exit %d) — %.1fs", result.returncode, elapsed)
@@ -62,6 +62,8 @@ def main():
     parser.add_argument("--skip-snapshots", action="store_true", help="Skip build_snapshots.py")
     parser.add_argument("--skip-trends",    action="store_true", help="Skip the Google Trends fetch (reuse category_trends_raw.csv)")
     parser.add_argument("--trends-only",    action="store_true", help="Only run Trends steps (5-8)")
+    parser.add_argument("--rebuild-snapshots", action="store_true",
+                        help="Rebuild snapshots for every market and replace the parquet (ADR-022)")
     args = parser.parse_args()
 
     log.info("\n%s", "█" * 60)
@@ -78,12 +80,14 @@ def main():
                 sys.exit(1)
 
         if not args.skip_snapshots:
-            if not run(PIPELINE / "build_snapshots.py", "build_snapshots — CLOB price history"):
+            build_args = ["--full"] if args.rebuild_snapshots else []
+            if not run(PIPELINE / "build_snapshots.py", "build_snapshots — CLOB price history", *build_args):
                 log.error("Aborting: build_snapshots failed.")
                 sys.exit(1)
 
         if has_new_csv_data():
-            if not run(PIPELINE / "fix_dataset.py", "fix_dataset — clean + write parquet"):
+            fix_args = ["--replace"] if args.rebuild_snapshots else []
+            if not run(PIPELINE / "fix_dataset.py", "fix_dataset — clean + write parquet", *fix_args):
                 log.error("Aborting: fix_dataset failed — later steps would read a stale parquet.")
                 sys.exit(1)
             if not run(PIPELINE / "categorize_markets.py", "categorize_markets — LLM categories"):

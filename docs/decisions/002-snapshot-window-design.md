@@ -1,7 +1,7 @@
 # ADR-002: Snapshot Window Design (12h interval, 14d burn-in, 14d cutoff)
 
 **Date:** 2026-09-18  
-**Status:** Accepted  
+**Status:** Accepted — 14-day cutoff superseded by ADR-022 from dataset v3 (interval and burn-in unchanged)  
 **Deciders:** Dhairya Dhamani, Hector Thompson Baroni, Sachin Sastri  
 **Code location:** `data_collection_pipeline/build_snapshots.py:37–39`
 
