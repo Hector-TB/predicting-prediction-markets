@@ -63,6 +63,13 @@ def nan_to_none(df: pd.DataFrame) -> pd.DataFrame:
     return df.where(pd.notnull(df), other=None)
 
 
+def upsert(key: list[str], df: pd.DataFrame) -> str:
+    """ON CONFLICT clause that overwrites every non-key column, so a reload
+    with a new dataset version replaces stale rows instead of keeping them."""
+    updates = ", ".join(f'"{c}" = EXCLUDED."{c}"' for c in df.columns if c not in key)
+    return f"({', '.join(key)}) DO UPDATE SET {updates}"
+
+
 def bulk_insert(conn, table: str, df: pd.DataFrame,
                 chunk_size: int = 5_000, conflict: str = "DO NOTHING") -> int:
     if df.empty:
@@ -113,8 +120,8 @@ def load_markets(conn) -> int:
                  "split", "total_volume", "duration_days"]]
 
     print(f"  Rows: {len(df):,}")
-    n = bulk_insert(conn, "markets", df, conflict="(market_id) DO NOTHING")
-    print(f"  Inserted: {n:,}")
+    n = bulk_insert(conn, "markets", df, conflict=upsert(["market_id"], df))
+    print(f"  Upserted: {n:,}")
     return n
 
 
@@ -132,8 +139,8 @@ def load_trends(conn) -> int:
     print(f"  Rows: {len(df):,}")
 
     n = bulk_insert(conn, "trends", df,
-                    conflict="(category, week_start) DO NOTHING")
-    print(f"  Inserted: {n:,}")
+                    conflict=upsert(["category", "week_start"], df))
+    print(f"  Upserted: {n:,}")
     return n
 
 
@@ -181,41 +188,51 @@ def upsert_model_run(conn, model_name: str, dataset_tag: str,
 def load_model_runs(conn) -> int:
     print(f"\n{SEP}\n  model_runs  (metrics from prediction CSVs)\n{SEP}")
 
-    LR  = MODELS / "logistic_regression/predictions/predictions.csv"
-    GB  = MODELS / "gradient_boosting/predictions/predictions.csv"
-    RF  = MODELS / "random_forest/predictions/test_predictions.csv"
-    RFT = MODELS / "random_forest_trends/predictions/trends_test_predictions.csv"
+    LR   = MODELS / "logistic_regression/predictions/predictions.csv"
+    LR_T = MODELS / "logistic_regression/predictions/predictions_trends.csv"
+    GB   = MODELS / "gradient_boosting/predictions/predictions.csv"
+    GB_T = MODELS / "gradient_boosting/predictions/predictions_trends.csv"
+    RF   = MODELS / "random_forest/predictions/test_predictions.csv"
+    RFT  = MODELS / "random_forest_trends/predictions/trends_test_predictions.csv"
 
+    # (model_name, trends?, [(csv, prob_col), ...] tried in order). The first
+    # source per model is the current train.py output; the second is the v1
+    # layout (base + trends columns in one predictions.csv).
     sources = [
-        # (csv,  model_name,                          dataset_tag,        prob_col)
-        (LR,  "logistic_regression_base",             "clean_v1",         "pred_prob_base"),
-        (LR,  "logistic_regression_trends",           "clean_v1_trends",  "pred_prob_trends"),
-        (GB,  "xgboost_base",                         "clean_v1",         "pred_prob_base"),
-        (GB,  "xgboost_trends",                       "clean_v1_trends",  "pred_prob_trends"),
-        (RF,  "random_forest_price_only",             "clean_v1",         "proba_price_only"),
-        (RF,  "random_forest_full",                   "clean_v1",         "proba_full"),
-        (RF,  "random_forest_full_calibrated",        "clean_v1",         "proba_full_calibrated"),
-        (RFT, "random_forest_trends_full",            "clean_v1_trends",  "proba_full"),
-        (RFT, "random_forest_trends_calibrated",      "clean_v1_trends",  "proba_trends_calibrated"),
+        ("logistic_regression_base",        False, [(LR, "pred_prob"), (LR, "pred_prob_base")]),
+        ("logistic_regression_trends",      True,  [(LR_T, "pred_prob"), (LR, "pred_prob_trends")]),
+        ("xgboost_base",                    False, [(GB, "pred_prob"), (GB, "pred_prob_base")]),
+        ("xgboost_trends",                  True,  [(GB_T, "pred_prob"), (GB, "pred_prob_trends")]),
+        ("random_forest_price_only",        False, [(RF, "proba_price_only")]),
+        ("random_forest_full",              False, [(RF, "proba_full")]),
+        ("random_forest_full_calibrated",   False, [(RF, "proba_full_calibrated")]),
+        ("random_forest_trends_full",       True,  [(RFT, "proba_full")]),
+        ("random_forest_trends_calibrated", True,  [(RFT, "proba_trends_calibrated")]),
     ]
 
     loaded    = 0
     csv_cache: dict[Path, pd.DataFrame] = {}
 
-    for csv_path, model_name, dataset_tag, prob_col in sources:
-        if not csv_path.exists():
-            print(f"  SKIP {model_name:<45} {csv_path.name} not found")
-            continue
-        if csv_path not in csv_cache:
-            csv_cache[csv_path] = pd.read_csv(csv_path)
-        df = csv_cache[csv_path]
-
-        if prob_col not in df.columns:
-            print(f"  SKIP {model_name:<45} column '{prob_col}' not found")
+    for model_name, trends, candidates in sources:
+        df = prob_col = csv_path = None
+        for path, col in candidates:
+            if not path.exists():
+                continue
+            if path not in csv_cache:
+                csv_cache[path] = pd.read_csv(path)
+            if col in csv_cache[path].columns:
+                df, prob_col, csv_path = csv_cache[path], col, path
+                break
+        if df is None:
+            print(f"  SKIP {model_name:<45} no prediction file/column found")
             continue
         if "outcome" not in df.columns:
             print(f"  SKIP {model_name:<45} no 'outcome' column — cannot compute metrics")
             continue
+
+        # Files written before dataset versioning (ADR-016) were all trained on v1
+        version = str(df["dataset_version"].iloc[0]) if "dataset_version" in df.columns else "v1"
+        dataset_tag = f"clean_{version}" + ("_trends" if trends else "")
 
         metrics = compute_metrics(df["outcome"], df[prob_col])
         run_id  = upsert_model_run(

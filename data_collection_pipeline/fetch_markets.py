@@ -9,6 +9,8 @@ Output: polymarket_markets_meta.csv
 Run this first, then run build_snapshots.py
 """
 
+import argparse
+import logging
 import requests
 import pandas as pd
 import numpy as np
@@ -31,7 +33,7 @@ DATA_DIR = ROOT / "data"
 GAMMA_URL = "https://gamma-api.polymarket.com"
 
 # Server-side API filters
-MARKET_FETCH_LIMIT  = 500
+MARKET_FETCH_LIMIT  = 100         # Gamma returns at most 100 rows per page
 MAX_MARKETS         = None          # None = fetch all
 VOLUME_NUM_MIN      = 1_000         # eliminates intraday/thin markets
 START_DATE_MIN      = "2023-01-01"  # CLOB era only
@@ -41,32 +43,73 @@ MIN_DURATION_DAYS   = 30            # no upper bound
 OUTCOME_THRESHOLD   = 0.95          # outcomePrices[0] >= this → YES, <= 0.05 → NO
 
 SLEEP_BETWEEN_CALLS = 0.15
-MAX_RETRIES         = 5         # retries per offset on server error
-RETRY_BACKOFF       = 5         # seconds to wait before first retry (doubles each attempt)
+MAX_RETRIES         = 8         # attempts per page; Gamma has multi-minute 500 outages
+RETRY_BACKOFF       = 5         # seconds before first retry (doubles each attempt)
+RETRY_BACKOFF_MAX   = 60        # cap per wait → ~4 min total before failing loudly
 
 OUTPUT_META         = DATA_DIR / "polymarket_markets_meta.csv"
+FETCH_CACHE_DIR     = DATA_DIR / "fetch_cache"   # per-window checkpoints for --full
+
+log = logging.getLogger(__name__)
+
+META_COLUMNS = [
+    "market_id", "clob_token_id", "question", "category", "start_date", "end_date",
+    "duration_days", "total_volume", "yes_final_price", "outcome",
+]
 
 
 # ─────────────────────────────────────────────
 # INCREMENTAL SUPPORT
 # ─────────────────────────────────────────────
 
+# Our own columns, kept from the existing meta on merge; everything else is
+# Gamma's and is always replaced by the fresh fetch (ADR-023)
+OWN_COLUMNS = ["category", "split"]
+
+
+def merge_fresh(existing: pd.DataFrame, fresh: pd.DataFrame) -> tuple[pd.DataFrame, int, int]:
+    """
+    Merge freshly fetched markets into the existing meta.
+
+    - Markets in both: every Gamma field comes from `fresh`; only `category`
+      (LLM) and `split` are kept from `existing`. Keeping the old row instead
+      once preserved estimated dates for 14,886 markets (ADR-023).
+    - Markets only in `fresh`: added with split = "test" (ADR-021).
+    - Markets only in `existing`: kept unchanged (not returned by this fetch).
+
+    Returns (merged, n_updated, n_added).
+    """
+    fresh = fresh.drop_duplicates("market_id", keep="last")
+    gamma_cols = [c for c in fresh.columns if c not in OWN_COLUMNS]
+    old = existing.set_index("market_id")
+    new = fresh.set_index("market_id")
+
+    both = old.index.intersection(new.index)
+    updated = new.loc[both, [c for c in gamma_cols if c != "market_id"]].join(old.loc[both, OWN_COLUMNS])
+    added = new.loc[new.index.difference(old.index)].copy()
+    added["split"] = "test"
+    kept = old.loc[old.index.difference(new.index)]
+
+    merged = pd.concat([f for f in (kept, updated, added) if len(f)]).reset_index()
+    merged = merged[existing.columns.tolist()]
+    merged["_start"] = pd.to_datetime(merged["start_date"], format="ISO8601", utc=True)
+    merged = merged.sort_values("_start").drop(columns="_start").reset_index(drop=True)
+    return merged, len(both), len(added)
+
+
 def load_existing_meta() -> tuple:
     """
-    Returns (existing_df | None, fetch_from_date, split_cutoff | None).
+    Returns (existing_df | None, fetch_from_date).
     fetch_from_date: start_date_min to pass to the API.
-    split_cutoff:    start_date of the first test market (freeze existing split).
     """
     if not OUTPUT_META.exists():
-        return None, START_DATE_MIN, None
+        return None, START_DATE_MIN
 
     df = pd.read_csv(OUTPUT_META)
     df["start_date"] = pd.to_datetime(df["start_date"], utc=True, errors="coerce")
     fetch_from   = (df["start_date"].max() - pd.Timedelta(days=7)).strftime("%Y-%m-%d")
-    test_cutoff  = df[df["split"] == "test"]["start_date"].min() if "split" in df.columns else None
-    split_cutoff = test_cutoff.strftime("%Y-%m-%d") if test_cutoff is not pd.NaT and test_cutoff is not None else None
     print(f"  Found {len(df):,} existing markets — fetching from {fetch_from}")
-    return df, fetch_from, split_cutoff
+    return df, fetch_from
 
 
 # ─────────────────────────────────────────────
@@ -107,124 +150,101 @@ def _date_windows(start: str, end: str, months: int = 1):
         current = wend
 
 
-def _fetch_window(start_date: str, end_date: str, depth: int = 0) -> list[dict]:
-    """Offset-paginate one date window.
+def _fetch_window(start_date: str, end_date: str, by: str = "start") -> list[dict]:
+    """Cursor-paginate one date window via /markets/keyset (ADR-013).
 
-    If the API returns 422 (offset cap hit), automatically splits the window
-    in half and recurses — handles high-volume months like election periods.
-    Max recursion depth of 6 gives windows as small as ~half a day.
+    by="start" windows on Gamma's startDate (the fetch); by="end" on endDate
+    (the independent route used by scripts/coverage_check.py, ADR-020).
+
+    Raises RuntimeError if a page still fails after MAX_RETRIES — a skipped
+    page would leave a gap the incremental watermark never revisits.
     """
-    MAX_DEPTH = 6
-    markets   = []
-    offset    = 0
-    failures  = 0
+    markets = []
+    cursor  = None
 
     while True:
         params = {
             "closed":         "true",
             "limit":          MARKET_FETCH_LIMIT,
-            "offset":         offset,
-            "order":          "startDate",
-            "ascending":      "true",
             "volume_num_min": VOLUME_NUM_MIN,
-            "start_date_min": start_date,
-            "start_date_max": end_date,
+            f"{by}_date_min": start_date,
+            f"{by}_date_max": end_date,
         }
-
-        cap_hit = False
-        batch   = None
+        if cursor:
+            params["after_cursor"] = cursor
 
         for attempt in range(1, MAX_RETRIES + 1):
             try:
-                r = requests.get(f"{GAMMA_URL}/markets", params=params, timeout=20)
-                if r.status_code == 422:
-                    cap_hit = True
-                    break
+                r = requests.get(f"{GAMMA_URL}/markets/keyset", params=params, timeout=30)
                 r.raise_for_status()
-                batch   = r.json()
-                failures = 0
+                page = r.json()
                 break
             except Exception as e:
-                if hasattr(e, "response") and getattr(e.response, "status_code", None) == 422:
-                    cap_hit = True
-                    break
-                wait = RETRY_BACKOFF * (2 ** (attempt - 1))
-                if attempt < MAX_RETRIES:
-                    print(f"    offset {offset} attempt {attempt}/{MAX_RETRIES}: {e} — retry in {wait}s")
-                    time.sleep(wait)
-                else:
-                    print(f"    offset {offset}: all retries failed — skipping")
+                if attempt == MAX_RETRIES:
+                    raise RuntimeError(
+                        f"Gamma keyset page failed {MAX_RETRIES}x for "
+                        f"{start_date} → {end_date} (cursor={cursor}): {e}"
+                    ) from e
+                wait = min(RETRY_BACKOFF * (2 ** (attempt - 1)), RETRY_BACKOFF_MAX)
+                log.warning("    %s → %s attempt %d/%d: %s — retry in %ds",
+                            start_date, end_date, attempt, MAX_RETRIES, e, wait)
+                time.sleep(wait)
 
-        if cap_hit:
-            if depth < MAX_DEPTH:
-                # Split window in half and recurse
-                mid = (pd.Timestamp(start_date) +
-                       (pd.Timestamp(end_date) - pd.Timestamp(start_date)) / 2
-                       ).strftime("%Y-%m-%d")
-                if mid <= start_date:
-                    print(f"    WARNING: window too small to split: {start_date} → {end_date}")
-                    break
-                indent = "  " * depth
-                print(f"    {indent}↳ cap hit — splitting {start_date}→{end_date} at {mid}")
-                left  = _fetch_window(start_date, mid, depth + 1)
-                right = _fetch_window(mid, end_date, depth + 1)
-                return markets + left + right
-            else:
-                print(f"    WARNING: hit cap at max depth ({MAX_DEPTH}) for {start_date}→{end_date}")
-            break
-
-        if batch is None:
-            failures += 1
-            if failures >= 3:
-                break
-            offset += MARKET_FETCH_LIMIT
-            continue
-
-        if not batch:
-            break
-
+        batch = page.get("markets") or []
         markets.extend(batch)
-        offset += MARKET_FETCH_LIMIT
+        cursor = page.get("next_cursor")
+        if not batch or not cursor:
+            return markets
         time.sleep(SLEEP_BETWEEN_CALLS)
 
-    return markets
 
+def fetch_filtered_markets(start_date_min: str, cache_dir: Optional[Path] = None) -> pd.DataFrame:
+    """Fetch monthly windows from start_date_min to today and filter each as it arrives.
 
-def fetch_all_markets(start_date_min: str = START_DATE_MIN) -> list[dict]:
-    """Fetch all markets using monthly date windows to avoid the API 2500-record offset cap."""
-    from datetime import date as _date
-    today   = _date.today().strftime("%Y-%m-%d")
+    Filtering per window keeps memory flat: most raw markets are short-duration
+    and discarded immediately. With cache_dir set, each fully elapsed window is
+    written to a CSV and reused on the next run, so an interrupted full fetch resumes.
+    """
+    today   = pd.Timestamp.now(tz="UTC").strftime("%Y-%m-%d")
     windows = list(_date_windows(start_date_min, today, months=1))
 
-    print("=" * 60)
-    print("STEP 1: Fetching markets from Gamma API")
-    print("=" * 60)
-    print(f"  volume_num_min : {VOLUME_NUM_MIN:,}")
-    print(f"  windows        : {len(windows)} monthly ({start_date_min} → {today})\n")
+    log.info("=" * 60)
+    log.info("STEP 1: Fetching markets from Gamma API (keyset pagination)")
+    log.info("=" * 60)
+    log.info("  volume_num_min : %s", f"{VOLUME_NUM_MIN:,}")
+    log.info("  windows        : %d monthly (%s → %s)", len(windows), start_date_min, today)
+    if cache_dir:
+        cache_dir.mkdir(parents=True, exist_ok=True)
+        log.info("  checkpoints    : %s", cache_dir)
 
-    all_markets = []
-    seen_ids    = set()
-
+    frames = []
     for i, (wstart, wend) in enumerate(windows, 1):
-        batch = _fetch_window(wstart, wend)
-        new   = []
-        for m in batch:
-            mid = m.get("conditionId") or str(m.get("id"))
-            if mid not in seen_ids:
-                seen_ids.add(mid)
-                new.append(m)
-        all_markets.extend(new)
-        if new or batch:
-            print(f"  [{i:>3}/{len(windows)}] {wstart} → {wend}  "
-                  f"+{len(new):>4} markets  total {len(all_markets):>6}")
+        cache_file = cache_dir / f"{wstart}_{wend}.csv" if cache_dir else None
+        if cache_file and cache_file.exists():
+            df = pd.read_csv(cache_file)
+            df["start_date"] = pd.to_datetime(df["start_date"], utc=True, format="ISO8601")
+            df["end_date"]   = pd.to_datetime(df["end_date"], utc=True, format="ISO8601")
+            log.info("  [%3d/%d] %s → %s  %5d passing (cached)", i, len(windows), wstart, wend, len(df))
+        else:
+            raw = _fetch_window(wstart, wend)
+            df  = parse_and_filter_markets(raw, verbose=False)
+            # Only checkpoint windows that have fully elapsed; the current one can still grow.
+            if cache_file and wend < today:
+                df.to_csv(cache_file, index=False)
+            log.info("  [%3d/%d] %s → %s  %7d fetched  %5d passing",
+                     i, len(windows), wstart, wend, len(raw), len(df))
+        frames.append(df)
 
-        if MAX_MARKETS and len(all_markets) >= MAX_MARKETS:
-            all_markets = all_markets[:MAX_MARKETS]
-            print(f"  Hit MAX_MARKETS cap ({MAX_MARKETS}).")
-            break
-
-    print(f"\nTotal markets fetched: {len(all_markets):,}")
-    return all_markets
+    frames = [f for f in frames if not f.empty]
+    if not frames:
+        return pd.DataFrame()
+    markets_df = pd.concat(frames, ignore_index=True)
+    # Window bounds are inclusive on both ends, so boundary markets can appear twice.
+    markets_df = markets_df.drop_duplicates(subset=["market_id"], keep="first").reset_index(drop=True)
+    if MAX_MARKETS:
+        markets_df = markets_df.head(MAX_MARKETS)
+    log.info("\nTotal markets passing filters: %s", f"{len(markets_df):,}")
+    return markets_df
 
 
 # ─────────────────────────────────────────────
@@ -232,10 +252,11 @@ def fetch_all_markets(start_date_min: str = START_DATE_MIN) -> list[dict]:
 # ─────────────────────────────────────────────
 
 
-def parse_and_filter_markets(raw_markets: list[dict]) -> pd.DataFrame:
-    print("\n" + "=" * 60)
-    print("STEP 2: Parsing and filtering markets")
-    print("=" * 60)
+def parse_and_filter_markets(raw_markets: list[dict], verbose: bool = True) -> pd.DataFrame:
+    if verbose:
+        print("\n" + "=" * 60)
+        print("STEP 2: Parsing and filtering markets")
+        print("=" * 60)
 
     records = []
     skipped = {
@@ -309,7 +330,9 @@ def parse_and_filter_markets(raw_markets: list[dict]) -> pd.DataFrame:
             "outcome":         outcome,
         })
 
-    df = pd.DataFrame(records)
+    df = pd.DataFrame(records, columns=META_COLUMNS)
+    if not verbose:
+        return df
 
     print(f"\nFilter results:")
     print(f"  Input:                        {len(raw_markets):>7,}")
@@ -334,55 +357,61 @@ def parse_and_filter_markets(raw_markets: list[dict]) -> pd.DataFrame:
 # MAIN
 # ─────────────────────────────────────────────
 
-def main():
+def main(full: bool = False):
     print("\n" + "█" * 60)
     print("  POLYMARKET — FETCH & FILTER MARKETS")
     print("█" * 60 + "\n")
 
-    existing_df, fetch_from, split_cutoff = load_existing_meta()
+    existing_df, fetch_from = load_existing_meta()
+    if full:
+        # Re-fetch everything (ADR-013). Gamma fields are refreshed on merge;
+        # LLM categories and the split are kept (ADR-023).
+        fetch_from = START_DATE_MIN
+        log.info("  --full: re-fetching from %s with checkpoints", fetch_from)
 
-    raw_markets = fetch_all_markets(start_date_min=fetch_from)
-
-    new_df = parse_and_filter_markets(raw_markets)
+    new_df = fetch_filtered_markets(fetch_from, cache_dir=FETCH_CACHE_DIR if full else None)
     if new_df.empty and existing_df is None:
         print("No markets passed filters. Exiting.")
         return
 
     if existing_df is not None:
-        known_ids = set(existing_df["market_id"])
-        new_df = new_df[~new_df["market_id"].isin(known_ids)].reset_index(drop=True)
-        print(f"\n  {len(new_df):,} genuinely new markets after dedup")
-
-        if new_df.empty:
-            print("  Nothing new — output unchanged.")
-            return
-
-        # New markets are temporally after the existing split cutoff → assign test
-        if split_cutoff:
-            cutoff_ts = pd.Timestamp(split_cutoff, tz="UTC")
-            new_df["split"] = new_df["start_date"].apply(
-                lambda d: "test" if d >= cutoff_ts else "train"
-            )
-        else:
-            new_df["split"] = "test"
-
-        markets_df = pd.concat([existing_df, new_df], ignore_index=True)
-        markets_df = markets_df.sort_values("start_date").reset_index(drop=True)
+        # Fresh Gamma values replace the stored ones for every re-fetched market;
+        # only category and split are ours (ADR-023). New markets always go to
+        # test (ADR-021) — safe even for one that resolved before the cutoff:
+        # fix_leakage.py drops every test row dated before the cutoff.
+        markets_df, n_updated, n_added = merge_fresh(existing_df, new_df)
+        print(f"\n  {n_updated:,} existing markets refreshed from Gamma, {n_added:,} new")
     else:
-        # First run — compute 80/20 split on full corpus
+        # First run — the split needs resolution times, which recompute_split.py
+        # looks up (ADR-021). Until then everything is test.
         markets_df = new_df.sort_values("start_date").reset_index(drop=True)
-        n           = len(markets_df)
-        cutoff_idx  = int(n * 0.8)
-        cutoff_date = markets_df.iloc[cutoff_idx]["start_date"]
-        markets_df["split"] = ["train"] * cutoff_idx + ["test"] * (n - cutoff_idx)
-        print(f"  Split cutoff: {cutoff_date.date()} — train={cutoff_idx:,}  test={n-cutoff_idx:,}")
+        markets_df["split"] = "test"
+        log.warning("  First run: all markets marked test — run scripts/recompute_split.py next (ADR-021).")
 
+    # Keep the exact Gamma records behind this meta, so meta_checks.py can
+    # verify every row (ADR-023). Newest file wins in load_fetch_cache().
+    FETCH_CACHE_DIR.mkdir(parents=True, exist_ok=True)
+    new_df.to_csv(FETCH_CACHE_DIR / "latest_fetch.csv", index=False)
+
+    from meta_checks import check_meta
+    problems = check_meta(markets_df)
+    if problems:
+        raise SystemExit(f"ERROR: merged meta fails integrity checks, not saved: "
+                         f"{ {k: len(v) for k, v in problems.items()} } (ADR-023)")
     markets_df.to_csv(OUTPUT_META, index=False)
     print(f"\nSaved: {OUTPUT_META}")
     print(f"  Markets: {len(markets_df):,}")
     print(f"  Columns: {list(markets_df.columns)}")
-    print(f"\nNext: run build_snapshots.py")
+    if full and existing_df is not None:
+        log.warning("\nFull re-fetch merged under the OLD frozen split. "
+                    "Run scripts/recompute_split.py before build_snapshots.py (ADR-013, ADR-021).")
+    else:
+        print(f"\nNext: run build_snapshots.py")
 
 
 if __name__ == "__main__":
-    main()
+    logging.basicConfig(level=logging.INFO, format="%(message)s")
+    parser = argparse.ArgumentParser(description="Fetch and filter resolved Polymarket markets")
+    parser.add_argument("--full", action="store_true",
+                        help="Re-fetch all markets since START_DATE_MIN (ADR-013), resumable via data/fetch_cache/")
+    main(full=parser.parse_args().full)

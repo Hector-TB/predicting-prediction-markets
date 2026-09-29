@@ -25,6 +25,21 @@ from sklearn.metrics import (
 TARGET = "outcome"
 
 
+def dataset_version() -> str:
+    """
+    Version of the local dataset (ADR-016), from data/manifest.json. Stamped on
+    prediction CSVs so every result says which data it was trained on.
+    Returns "unversioned" (with a warning) for data that was never published or pulled.
+    """
+    import json
+    from pathlib import Path
+    manifest = Path(__file__).resolve().parents[2] / "data" / "manifest.json"
+    if not manifest.exists():
+        print("  WARNING: local data has no manifest — publish or pull a version first (ADR-016)")
+        return "unversioned"
+    return json.loads(manifest.read_text())["version"]
+
+
 def find_optimal_threshold(y_true, y_prob):
     """Return (threshold, f1) that maximises F1 on the precision-recall curve."""
     precision, recall, thresholds = precision_recall_curve(y_true, y_prob)
@@ -89,88 +104,110 @@ def check_calibration(y_true, y_prob, n_bins=10):
     print(f"{'─'*50}")
 
 
-def bootstrap_auc_diff(y_true, y_prob_base, y_prob_new, n_boot: int = 1000, seed: int = 42):
+def compute_metrics(y_true, y_prob, sample_weight=None) -> dict:
+    """
+    AUC-ROC, PR-AUC, log-loss and Brier as a dict (the quiet counterpart of `evaluate`).
+    Pass `sample_weight` (e.g. 1 / snapshots per market) to count each market once.
+    """
+    y_prob = np.clip(y_prob, 1e-6, 1 - 1e-6)
+    w = sample_weight
+    return {
+        "auc":    roc_auc_score(y_true, y_prob, sample_weight=w),
+        "pr_auc": average_precision_score(y_true, y_prob, sample_weight=w),
+        "log_loss": log_loss(y_true, y_prob, sample_weight=w),
+        "brier":  brier_score_loss(y_true, y_prob, sample_weight=w),
+        "n":      len(y_true),
+    }
+
+
+def bootstrap_auc_diff(y_true, y_prob_base, y_prob_new, n_boot: int = 1000, seed: int = 42,
+                       groups=None, verbose: bool = True, sample_weight=None):
     """
     Bootstrap 95% CI on (AUC_new − AUC_base).
 
     Reports the point estimate, CI, and a one-sided p-value for H0: diff <= 0.
     Use this to test whether a Trends-enriched model genuinely beats its baseline.
+
+    Pass `groups` (e.g. market_id per row) to resample whole groups instead of
+    rows. Snapshots from the same market are strongly correlated, so resampling
+    rows understates the uncertainty; resample markets for honest CIs.
+    `sample_weight` weights rows in every AUC (e.g. to count each market once).
     """
     rng  = np.random.default_rng(seed)
+    w    = None if sample_weight is None else np.asarray(sample_weight)
     n    = len(y_true)
+    if groups is not None:
+        _, codes = np.unique(np.asarray(groups), return_inverse=True)
+        order    = np.argsort(codes, kind="stable")
+        bounds   = np.flatnonzero(np.diff(codes[order])) + 1
+        members  = np.split(order, bounds)
     diffs = []
     for _ in range(n_boot):
-        idx  = rng.integers(0, n, size=n)
+        if groups is None:
+            idx = rng.integers(0, n, size=n)
+        else:
+            picks = rng.integers(0, len(members), size=len(members))
+            idx   = np.concatenate([members[g] for g in picks])
         yt   = y_true[idx]
         if len(np.unique(yt)) < 2:
             continue
+        wt   = None if w is None else w[idx]
         diffs.append(
-            roc_auc_score(yt, y_prob_new[idx]) - roc_auc_score(yt, y_prob_base[idx])
+            roc_auc_score(yt, y_prob_new[idx], sample_weight=wt) - roc_auc_score(yt, y_prob_base[idx], sample_weight=wt)
         )
     diffs = np.array(diffs)
-    point  = roc_auc_score(y_true, y_prob_new) - roc_auc_score(y_true, y_prob_base)
+    point  = (roc_auc_score(y_true, y_prob_new, sample_weight=w)
+              - roc_auc_score(y_true, y_prob_base, sample_weight=w))
     lo, hi = np.percentile(diffs, [2.5, 97.5])
     p_val  = (diffs <= 0).mean()
 
-    print(f"\n{'─'*55}")
-    print(f"  Bootstrap AUC difference (new − base)  [n_boot={n_boot}]")
-    print(f"  Point estimate : {point:+.4f}")
-    print(f"  95% CI         : [{lo:+.4f},  {hi:+.4f}]")
-    if lo > 0:
-        verdict = "significant (CI excludes 0)"
-    elif hi < 0:
-        verdict = "significant NEGATIVE (CI excludes 0)"
-    else:
-        verdict = "not significant (CI includes 0)"
-    print(f"  p (diff <= 0)  : {p_val:.3f}  →  {verdict}")
-    print(f"{'─'*55}")
+    if verbose:
+        unit = "markets" if groups is not None else "rows"
+        print(f"\n{'─'*55}")
+        print(f"  Bootstrap AUC difference (new − base)  [n_boot={n_boot}, resampling {unit}]")
+        print(f"  Point estimate : {point:+.4f}")
+        print(f"  95% CI         : [{lo:+.4f},  {hi:+.4f}]")
+        if lo > 0:
+            verdict = "significant (CI excludes 0)"
+        elif hi < 0:
+            verdict = "significant NEGATIVE (CI excludes 0)"
+        else:
+            verdict = "not significant (CI includes 0)"
+        print(f"  p (diff <= 0)  : {p_val:.3f}  →  {verdict}")
+        print(f"{'─'*55}")
     return {"point": point, "ci_lo": lo, "ci_hi": hi, "p_value": p_val}
 
 
-def evaluate_by_volume_quintile(test_df: pd.DataFrame, y_prob: np.ndarray, threshold: float,
-                                target: str = TARGET):
+def bootstrap_loss_diff(y_true, y_prob_base, y_prob_new, groups, n_boot: int = 1000, seed: int = 42,
+                        sample_weight=None) -> dict:
     """
-    Per-volume-quintile AUC, PR-AUC, and F1 on the test set.
+    Market-level bootstrap 95% CIs on (new − base) for log-loss and Brier.
+    Negative = the new model's probabilities are better.
 
-    Helps identify whether the model's edge concentrates in thin markets
-    (low liquidity / slow price discovery) vs high-volume ones.
+    Both losses are (weighted) means of per-row losses, so each resample is
+    computed from per-market sums: sum of weighted loss differences / sum of weights.
     """
-    df = test_df.copy().reset_index(drop=True)
-    df["_prob"] = y_prob
+    y  = np.asarray(y_true, dtype=float)
+    pb = np.clip(np.asarray(y_prob_base, dtype=float), 1e-6, 1 - 1e-6)
+    pn = np.clip(np.asarray(y_prob_new, dtype=float), 1e-6, 1 - 1e-6)
+    w  = np.ones(len(y)) if sample_weight is None else np.asarray(sample_weight, dtype=float)
+    _, codes = np.unique(np.asarray(groups), return_inverse=True)
+    n_groups = codes.max() + 1
+    W = np.bincount(codes, weights=w, minlength=n_groups)
 
-    # Aggregate to market level (mean prediction, single outcome per market)
-    mkt = (
-        df.groupby("market_id")
-        .agg(
-            total_volume=("total_volume", "first"),
-            outcome=(target, "first"),
-            prob=("_prob", "mean"),
-        )
-        .reset_index()
-    )
-    mkt["quintile"] = pd.qcut(mkt["total_volume"], q=5,
-                               labels=["Q1 (lowest)", "Q2", "Q3", "Q4", "Q5 (highest)"])
+    def row_losses(p):
+        return {"log_loss": -(y * np.log(p) + (1 - y) * np.log(1 - p)), "brier": (p - y) ** 2}
 
-    print(f"\n{'─'*72}")
-    print(f"  Per-volume-quintile metrics (market-level, threshold={threshold:.3f})")
-    print(f"  {'Quintile':<14} {'N':>6}  {'Volume range':>22}  {'AUC':>6}  {'PR-AUC':>7}  {'YES%':>6}")
-    print(f"{'─'*72}")
-
-    for q in mkt["quintile"].cat.categories:
-        grp  = mkt[mkt["quintile"] == q]
-        yt   = grp["outcome"].values
-        yp   = grp["prob"].values
-        vmin = grp["total_volume"].min()
-        vmax = grp["total_volume"].max()
-        if len(np.unique(yt)) < 2:
-            print(f"  {str(q):<14} {len(grp):>6}  (skip — single class)")
-            continue
-        auc = roc_auc_score(yt, yp)
-        pr  = average_precision_score(yt, yp)
-        yes = yt.mean()
-        print(f"  {str(q):<14} {len(grp):>6}  ${vmin:>9,.0f}–${vmax:>9,.0f}  {auc:>6.4f}  {pr:>7.4f}  {yes:>6.1%}")
-
-    print(f"{'─'*72}")
+    lb, ln = row_losses(pb), row_losses(pn)
+    rng = np.random.default_rng(seed)
+    picks = [np.bincount(rng.integers(0, n_groups, n_groups), minlength=n_groups) for _ in range(n_boot)]
+    out = {}
+    for name in ("log_loss", "brier"):
+        S = np.bincount(codes, weights=w * (ln[name] - lb[name]), minlength=n_groups)
+        boots = np.array([(c @ S) / (c @ W) for c in picks])
+        lo, hi = np.percentile(boots, [2.5, 97.5])
+        out[name] = {"point": S.sum() / W.sum(), "ci_lo": lo, "ci_hi": hi}
+    return out
 
 
 def analyze_market_disagreements(test_df: pd.DataFrame, y_prob: np.ndarray,

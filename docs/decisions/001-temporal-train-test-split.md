@@ -1,7 +1,7 @@
 # ADR-001: Temporal, Market-Level 80/20 Train/Test Split
 
 **Date:** 2026-09-18  
-**Status:** Accepted  
+**Status:** Superseded by ADR-021 (split by resolution time) — market-level splitting and 80/20 still apply  
 **Deciders:** Dhairya Dhamani, Hector Thompson Baroni, Sachin Sastri  
 **Code location:** `data_collection_pipeline/fetch_markets.py:271–276`
 

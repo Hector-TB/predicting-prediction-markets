@@ -143,7 +143,7 @@ print(f"  Categories in trends subset: {sorted(train_trends['category'].unique()
 #   market_id                 — unique identifier, not generalizable
 #   snapshot_timestamp        — raw time; target_percentile captures position
 #   price_deviation_from_half — mathematically redundant with price_at_snapshot
-#   total_volume              — redundant with log_volume
+#   total_volume, log_volume  — final lifetime volume, unknown at snapshot time (ADR-018)
 #   days_before_close         — redundant with target_percentile + duration_days
 #   price_mean_7d/14d         — r>0.96 with price_at_snapshot, nearly redundant
 #   pct_lifetime_elapsed      — r=0.93 with target_percentile; target is cleaner
@@ -162,7 +162,6 @@ base_numeric = [
     'price_at_snapshot',      # crowd probability estimate — strongest feature
     'target_percentile',      # standardized lifecycle stage (0.20-0.80)
     'duration_days',          # total market length
-    'log_volume',             # liquidity proxy
     'price_volatility_7d',    # market uncertainty over past 7 days
     'price_change_7d',        # net price movement over past 7 days — momentum
     'price_trend_7d',         # slope of price over past 7 days — directional momentum

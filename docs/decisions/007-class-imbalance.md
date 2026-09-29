@@ -28,7 +28,7 @@ All models apply cost-sensitive learning to handle imbalance:
 
 **Why not report accuracy:** A model that always predicts NO hits 78% accuracy. Reporting accuracy as a primary metric would mislead.
 
-**Why AUC-ROC:** Threshold-independent, intuitive (probability that model ranks a YES higher than a NO), and the standard metric for the baseline comparison (market price AUC = 0.964).
+**Why AUC-ROC:** Threshold-independent, intuitive (probability that model ranks a YES higher than a NO), and the standard metric for the baseline comparison (market price AUC was quoted as 0.964; it doesn't reproduce on the clean data and must be recomputed — see ADR-014).
 
 ## Alternatives considered
 
@@ -47,6 +47,13 @@ All models apply cost-sensitive learning to handle imbalance:
 - Threshold at 0.5 is no longer the right operating point; optimal threshold is found empirically per model
 - All evaluation reporting must include AUC-ROC and log-loss; raw accuracy may be included as a secondary metric only
 
+## Amendment (2026-09-29): one weight per market, all models (ADR-024)
+
+On top of class balancing, every model now weights each snapshot by 1 / (its market's snapshot count), scaled to mean 1, so every market counts once in total. LR and RF already did this (undocumented); XGBoost did not, so long-running markets dominated it. The two weights multiply: `class_weight='balanced'` / `scale_pos_weight` as above, plus `sample_weight` from `models.common.training.market_weights`.
+
+Assumption 1 above no longer holds: the YES rate has risen over time (train 25.4%, test 38.4% of snapshots on v3). ADR-024 handles this with a time-ordered holdout for calibration.
+
 ## Related ADRs
 
 - ADR-004: Outcome threshold (source of the imbalance — 80% of markets resolve NO)
+- ADR-024: Shared training protocol (market weights, time-ordered holdout)

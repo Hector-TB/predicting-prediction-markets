@@ -1,7 +1,7 @@
 # ADR-012: S3 + DuckDB as the Data Lake
 
 **Date:** 2026-09-19  
-**Status:** Accepted  
+**Status:** Accepted — flat S3 layout and `sync.py push` superseded by ADR-016 (versioned datasets)  
 **Deciders:** Hector Thompson Baroni  
 
 ---

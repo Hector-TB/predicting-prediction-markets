@@ -1,7 +1,13 @@
 # Data files — live on S3, not in git (see ADR-012)
-# Sync with: python data/sync.py pull / push
+# Versioned on S3 with data/sync.py (ADR-016): list / status / pull / publish
 data/*.parquet
 data/*.csv
+data/fetch_cache/
+# which dataset version is checked out locally (git has no inline comments)
+data/manifest.json
+# settings of the snapshot build in progress (build_snapshots.py resume guard)
+data/*.build.json
+data/*.bak.csv
 
 # Notebooks
 testing.ipynb
@@ -13,6 +19,9 @@ models/*/artifacts/*.joblib
 models/*/artifacts/*.txt
 models/*/artifacts/*.bin
 models/*/artifacts/*.parquet
+
+# Test-set predictions — on S3 via scripts/sync_predictions.py (ADR-019 amendment)
+models/*/predictions/*.csv
 
 # Results JSON (keep these — small and useful to share)
 # models/*/results/*.json  ← intentionally NOT ignored
@@ -28,3 +37,6 @@ __pycache__/
 eda.ipynb
 .DS_Store
 .env
+
+# Pipeline run logs
+logs/

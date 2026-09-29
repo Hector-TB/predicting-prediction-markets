@@ -5,6 +5,7 @@ Used by the /evaluate skill and for ad-hoc comparison.
     python scripts/print_metrics.py
 """
 
+import json
 import sys
 from pathlib import Path
 
@@ -18,10 +19,10 @@ MODELS = ROOT / "models"
 SOURCES = [
     # (label,            csv path,                                                   prob col)
     ("Market baseline",  None,                                                        "price_at_snapshot"),
-    ("LR base",          MODELS / "logistic_regression/predictions/predictions.csv",  "pred_prob_base"),
-    ("LR + trends",      MODELS / "logistic_regression/predictions/predictions.csv",  "pred_prob_trends"),
-    ("XGBoost base",     MODELS / "gradient_boosting/predictions/predictions.csv",    "pred_prob_base"),
-    ("XGBoost + trends", MODELS / "gradient_boosting/predictions/predictions.csv",    "pred_prob_trends"),
+    ("LR",               MODELS / "logistic_regression/predictions/predictions.csv",  "pred_prob"),
+    ("LR + trends",      MODELS / "logistic_regression/predictions/predictions_trends.csv", "pred_prob"),
+    ("XGBoost",          MODELS / "gradient_boosting/predictions/predictions.csv",    "pred_prob"),
+    ("XGBoost + trends", MODELS / "gradient_boosting/predictions/predictions_trends.csv", "pred_prob"),
     ("RF price-only",    MODELS / "random_forest/predictions/test_predictions.csv",   "proba_price_only"),
     ("RF full",          MODELS / "random_forest/predictions/test_predictions.csv",   "proba_full"),
     ("RF calibrated",    MODELS / "random_forest/predictions/test_predictions.csv",   "proba_full_calibrated"),
@@ -30,6 +31,7 @@ SOURCES = [
 ]
 
 BASELINE_PATH = ROOT / "data" / "polymarket_ml_dataset_clean.parquet"
+MANIFEST      = ROOT / "data" / "manifest.json"
 
 
 def compute(y, p):
@@ -45,6 +47,9 @@ def compute(y, p):
 
 def main():
     cache: dict[Path, pd.DataFrame] = {}
+    # Only compare predictions made on the local dataset version (ADR-016)
+    version = json.loads(MANIFEST.read_text())["version"] if MANIFEST.exists() else None
+    print(f"\n  Dataset: {version or 'unknown (no data/manifest.json)'}")
 
     # Market baseline — load from parquet if CSV not available
     baseline = None
@@ -62,7 +67,7 @@ def main():
                 m = baseline
                 print(f"  {'Market baseline':<22} {m['auc']:>8.4f} {m['ll']:>10.4f} {m['pr']:>8.4f} {m['n']:>10,}  ← beat this")
             else:
-                print(f"  {'Market baseline':<22} {'0.9640':>8} {'0.1710':>10} {'':>8} {'':>10}  ← beat this")
+                print(f"  {'Market baseline':<22}  ({BASELINE_PATH.name} not found — run the pipeline)")
             print("  " + "─" * 64)
             continue
 
@@ -76,6 +81,11 @@ def main():
 
         if prob_col not in df.columns:
             print(f"  {label:<22}  (column '{prob_col}' not found)")
+            continue
+
+        file_version = str(df["dataset_version"].iloc[0]) if "dataset_version" in df.columns else "v1"
+        if version and file_version != version:
+            print(f"  {label:<22}  (trained on {file_version}, not {version} — retrain)")
             continue
 
         m = compute(df["outcome"].values, df[prob_col].values)

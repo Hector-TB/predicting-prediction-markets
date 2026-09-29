@@ -1,0 +1,117 @@
+{
+  "version": "v3",
+  "created_at": "2026-09-29T01:27:47+00:00",
+  "parent": "v2",
+  "notes": "Full snapshot rebuild of every market without the 14-day pre-close cutoff (ADR-022): snapshots run to the scheduled end, stop at closedTime; near-certain rows removed only by the price rule (ADR-014). Meta refreshed from Gamma (ADR-023): 14,886 estimated start/end dates replaced with Gamma's, 13 markets under the 30-day minimum dropped (45,130 markets). Split by resolution time, T=2026-07-01 (ADR-021). Build with retries (0 failed fetches). Trends as in v2 (Google 429 on re-fetch). Coverage check by end date: 0 markets missed (692 closed after the 2026-09-25 fetch). Full quality check passed (scripts/check_snapshots.py).",
+  "fetched_on": "2026-09-25",
+  "code": {
+    "git_commit": "a44a9af160460ed4887f7bd5ff2d56cf036dc557",
+    "git_branch": "pipeline-leakage-and-categories",
+    "uncommitted_changes": false,
+    "adrs": [
+      "001",
+      "002",
+      "003",
+      "004",
+      "005",
+      "006",
+      "007",
+      "008",
+      "009",
+      "010",
+      "011",
+      "012",
+      "013",
+      "014",
+      "015",
+      "016",
+      "017",
+      "018",
+      "019",
+      "020",
+      "021",
+      "022",
+      "023"
+    ]
+  },
+  "contents": {
+    "markets_fetched": 45130,
+    "market_start_date_min": "2020-10-02",
+    "market_start_date_max": "2026-09-22",
+    "markets_fetched_by_split": {
+      "train": 36104,
+      "test": 9026
+    },
+    "clean_snapshots": 2534852,
+    "clean_markets": 29531,
+    "clean_snapshots_by_split": {
+      "train": 2038895,
+      "test": 196977,
+      "test_pre_cutoff": 298980
+    },
+    "clean_markets_by_split": {
+      "train": 23120,
+      "test": 4924,
+      "test_pre_cutoff": 3233
+    },
+    "clean_snapshot_yes_rate": 0.2705,
+    "snapshot_timestamp_min": "2022-11-30 02:08:51.147000+00:00",
+    "snapshot_timestamp_max": "2026-09-25 12:28:17.286343+00:00",
+    "snapshot_range_by_split": {
+      "train": [
+        "2022-11-30 02:08:51.147000+00:00",
+        "2026-07-01 04:46:59.125385+00:00"
+      ],
+      "test": [
+        "2026-07-01 07:13:04.906879+00:00",
+        "2026-09-25 12:28:17.286343+00:00"
+      ],
+      "test_pre_cutoff": [
+        "2025-05-26 22:26:22.665665+00:00",
+        "2026-07-01 07:11:34.855827+00:00"
+      ]
+    }
+  },
+  "files": {
+    "polymarket_markets_meta.csv": {
+      "bytes": 13580817,
+      "sha256": "59cec9eff5647afb0aed7845f66f7998abdb7c858dafecffe036bc794b0e368a",
+      "rows": null
+    },
+    "polymarket_ml_dataset_clean.parquet": {
+      "bytes": 95687748,
+      "sha256": "67a1997b202f6c211769290c38f865b8e0199893ad25c518b00e0a7a61bcd93b",
+      "rows": 2534852
+    },
+    "polymarket_ml_dataset_with_trends_clean.parquet": {
+      "bytes": 114338145,
+      "sha256": "dec95c4c0d7ac71449a3abf61b9849c093175a44eb051a9f690146286c0db8a8",
+      "rows": 2534852
+    },
+    "polymarket_ml_dataset.parquet": {
+      "bytes": 172338046,
+      "sha256": "3ca7ddefb309c7806715f0af714cc77a4b02cbb6d1ecc924198172074d209700",
+      "rows": 5435763
+    },
+    "polymarket_ml_dataset_with_trends.parquet": {
+      "bytes": 216067026,
+      "sha256": "b6c7cac34245ef0a145c8847cbc4c573ce4a856b56e949597bd437c1ba11b38e",
+      "rows": 5435763
+    },
+    "category_trends_features.parquet": {
+      "bytes": 15614,
+      "sha256": "96834a17ed2d4f04fb37f099553de91fcda122e6db76e271ccdf1b247c530804",
+      "rows": 1755
+    },
+    "category_trends_raw.csv": {
+      "bytes": 41621,
+      "sha256": "301d4160b738ed720cc2c8172e4e180d000f71bef8ff5cb588a4acb8eecb9c7b",
+      "rows": null
+    },
+    "market_closed_times.csv": {
+      "bytes": 4199115,
+      "sha256": "48d05f85b90983d03867d1c71612b5b56d668cbed4981483c9d87c5790c615e3",
+      "rows": null
+    }
+  }
+}

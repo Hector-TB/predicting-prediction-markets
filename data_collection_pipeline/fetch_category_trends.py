@@ -1,3 +1,4 @@
+import sys
 import time
 from datetime import date
 from pathlib import Path
@@ -22,20 +23,18 @@ CATEGORY_KEYWORDS = {
 OUTPUT_PATH = DATA_DIR / "category_trends_raw.csv"
 
 
-def get_timeframe() -> tuple[str, str]:
-    """Return (start_date, end_date) for the API call.
+START_DATE = "2023-01-01"
 
-    On first run: full history from 2023-01-01.
-    On subsequent runs: picks up from the week after the last fetched week.
+
+def get_timeframe() -> tuple[str, str]:
+    """Return (start_date, end_date): always the full range, START_DATE to today.
+
+    Google scales each request to 0–100 over its own timeframe, and returns daily
+    (not weekly) points for ranges under ~9 months. Appending a short incremental
+    fetch would therefore mix scales and granularities, so every run re-fetches
+    the whole range and replaces the file.
     """
-    if OUTPUT_PATH.exists():
-        existing = pd.read_csv(OUTPUT_PATH)
-        max_week  = pd.to_datetime(existing["week_start"]).max()
-        start_str = (max_week + pd.Timedelta(weeks=1)).strftime("%Y-%m-%d")
-    else:
-        start_str = "2023-01-01"
-    end_str = date.today().strftime("%Y-%m-%d")
-    return start_str, end_str
+    return START_DATE, date.today().strftime("%Y-%m-%d")
 
 
 def fetch_category(pytrends, category, keywords, timeframe: str):
@@ -63,36 +62,41 @@ def main():
     start_date, end_date = get_timeframe()
     timeframe = f"{start_date} {end_date}"
 
-    if start_date >= end_date:
-        print(f"Trends already up to date (coverage through {start_date}). Nothing to fetch.")
-        return
-
     print(f"Fetching trends for timeframe: {timeframe}")
     pytrends    = TrendReq(hl="en-US", tz=0, timeout=(10, 25))
     all_results = []
+    failed      = []
 
     for i, (category, keywords) in enumerate(CATEGORY_KEYWORDS.items()):
-        result = fetch_category(pytrends, category, keywords, timeframe)
-        if result is not None:
+        try:
+            result = fetch_category(pytrends, category, keywords, timeframe)
+        except Exception as e:
+            print(f"  ERROR: {category}: {e}")
+            result = None
+        if result is None:
+            failed.append(category)
+        else:
             all_results.append(result)
         if i < len(CATEGORY_KEYWORDS) - 1:
             time.sleep(3)
 
-    if not all_results:
-        print("No data fetched.")
-        return
+    # Keep the previous file unless every category came back: a partial file
+    # would silently zero out the missing categories' trend features.
+    if failed:
+        print(f"\nFAILED for {failed} — {OUTPUT_PATH.name} left unchanged.")
+        sys.exit(1)
 
-    new_data = pd.concat(all_results, ignore_index=True)
-
-    if OUTPUT_PATH.exists():
-        existing = pd.read_csv(OUTPUT_PATH)
-        combined = pd.concat([existing, new_data], ignore_index=True)
-        combined = combined.drop_duplicates(subset=["category", "week_start"]).reset_index(drop=True)
-    else:
-        combined = new_data
+    combined = pd.concat(all_results, ignore_index=True)
+    combined["week_start"] = pd.to_datetime(combined["week_start"])
+    gaps = combined.sort_values("week_start").groupby("category")["week_start"].diff().dropna()
+    if not (gaps == pd.Timedelta(days=7)).all():
+        print(f"\nERROR: expected weekly points, got spacings {sorted(gaps.unique())} — "
+              f"{OUTPUT_PATH.name} left unchanged.")
+        sys.exit(1)
 
     combined.to_csv(OUTPUT_PATH, index=False)
-    print(f"\nSaved {len(combined)} rows to {OUTPUT_PATH} ({len(new_data)} new rows appended)")
+    print(f"\nSaved {len(combined)} rows to {OUTPUT_PATH} "
+          f"({combined['week_start'].min().date()} to {combined['week_start'].max().date()})")
     print(combined.groupby("category")["trend_value"].describe().round(2))
 
 

@@ -9,7 +9,7 @@ ARTIFACTS_DIR = SCRIPT_DIR / "artifacts"
 RANDOM_STATE  = 42
 
 # ── LOAD SUBSAMPLED DATA ─────────────────────────────────────────────────────────
-df_sampled = pd.read_parquet(ARTIFACTS_DIR / "df_sampled.parquet")
+df_sampled = pd.read_parquet(ARTIFACTS_DIR / "df_sampled_clean.parquet")
 df_sampled['category'] = df_sampled['category'].fillna('unknown')
 df_sampled['outcome']  = df_sampled['outcome'].astype(int)
 
@@ -25,7 +25,7 @@ print(f"Best CV ROC-AUC: {search.best_score_:.4f}")
 
 # ── FEATURE DEFINITIONS ──────────────────────────────────────────────────────────
 numeric_features = [
-    'price_at_snapshot', 'target_percentile', 'duration_days', 'log_volume',
+    'price_at_snapshot', 'target_percentile', 'duration_days',
     'price_volatility_7d', 'price_change_7d', 'price_trend_7d',
     'price_volatility_14d', 'price_change_14d', 'price_trend_14d',
 ]
