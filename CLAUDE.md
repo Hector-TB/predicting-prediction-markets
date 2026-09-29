@@ -24,8 +24,8 @@ Dataset versions on S3 (ADR-016, manifests in `data/manifests/`): **v1** = the c
 - LR, XGBoost and RF trained on v3 under one protocol (ADR-024, `models/common/training.py`); re-score in `docs/paper/rescore_v3_data.md`. README results are still the paper's (v1). v2 won't be trained (superseded by v3)
 - Gates before any publish: `meta_checks.py` (in the pipeline), `scripts/coverage_check.py`, `scripts/check_snapshots.py`
 - Leftovers to delete when convenient (user said no rush): `data/polymarket_ml_dataset.v2.csv` (on S3 staging), `data/*.bak.csv`, `data/*_part[12]*.parquet`, `s3://…/staging/2026-09-27/` and `staging/2026-09-28-v3/`
-- Supabase (free tier): still holds v1. `db/load_parquet.py` now upserts. Re-check tables after any unpause before assuming data loss
-- S3 bucket versioning on; work is on branch `pipeline-leakage-and-categories` (pushed, not merged to `main`)
+- Supabase (free tier): refreshed with v3 on 2026-09-29 (45,130 v3 markets with Gamma dates, 1,755 trends rows, model runs for v1 + v3). The 13 v1-only markets (dropped by ADR-023) were deleted, so `markets` matches v3 exactly. `db/load_parquet.py` only upserts: delete markets dropped from a new version by hand. Re-check tables after any unpause before assuming data loss
+- S3 bucket versioning on; `pipeline-leakage-and-categories` merged to `main` (PR #1, 2026-09-29)
 - Machine: 8 GB RAM, 2 physical cores; VS Code runs from a translocated path (move it to Applications). Background jobs started from Claude die if VS Code quits
 - No API, no frontend yet
 
@@ -33,8 +33,8 @@ Dataset versions on S3 (ADR-016, manifests in `data/manifests/`): **v1** = the c
 
 1. ~~**Train on v3**~~ ✓ 2026-09-29: LR, XGBoost, RF (Trends variants skipped until the Trends rework, ROADMAP 4c). Predictions on S3 (`predictions/v3/`).
 2. **Re-score** ✓ `docs/paper/rescore_v3_data.md`: XGBoost/RF beat the market (ΔAUC ≈ +0.014 [+0.009, +0.020]; per-market-weighted ΔAUC +0.011, Δlog-loss −0.013, both CIs clear of zero; LR ≈ market). The edge is ≥ 30 days before close, also within markets of the same length; none in markets > 1 year. Trading survives a 2¢/token cost, but fills at the recorded price are unverified. README results updated (v3 table first, the paper's v1 table kept as published).
-3. **Refresh Supabase:** `python3 db/load_parquet.py`.
-4. **Merge** `pipeline-leakage-and-categories` → `main` (or open a PR).
+3. ~~**Refresh Supabase**~~ ✓ 2026-09-29.
+4. ~~**Merge** → `main`~~ ✓ PR #1, 2026-09-29.
 5. **Then build:** the one-command refresh + model releases (ROADMAP 4b, ADR-019) with the three checks as gates; the fixed incremental fetch (ADR-020; don't run a plain incremental `fetch_markets.py` before it); then the site prerequisites (ROADMAP 5) and the API/site. Separate tasks: Trends rework, volume to date (ROADMAP 4c). 692 markets closed after the 25 Sep fetch will come in with the next fetch.
 
 ## Key conventions

@@ -102,8 +102,10 @@ def load_markets(conn) -> int:
             "start_date", "end_date", "duration_days", "total_volume",
             "yes_final_price", "outcome", "split",
         ]]
-        df["start_date"] = pd.to_datetime(df["start_date"], utc=True, errors="coerce")
-        df["end_date"]   = pd.to_datetime(df["end_date"],   utc=True, errors="coerce")
+        # Gamma dates mix whole and fractional seconds: parse as ISO 8601 and fail
+        # loudly rather than blank a date (ADR-023)
+        df["start_date"] = pd.to_datetime(df["start_date"], utc=True, format="ISO8601")
+        df["end_date"]   = pd.to_datetime(df["end_date"],   utc=True, format="ISO8601")
         print(f"  Source: {csv.name}")
     else:
         # CSV is gitignored — derive unique market rows from the snapshot parquet.
