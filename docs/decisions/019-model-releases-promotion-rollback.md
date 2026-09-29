@@ -167,25 +167,9 @@ Passing only makes the release promotable: `promote` still asks.
 3. **Promotion checks** as above: significance-based for AUC and log-loss; calibration error at most +0.01; the market comparison warns only.
 4. **Full coverage recount** automatically when the last one is more than 30 days old.
 
-### Later: walk-forward backtest (parked)
+### Not decided here
 
-A single out-of-time test says a model did well in one period. A walk-forward backtest (Dhar & Stein 1998; Sobehart, Keenan & Stein 2000) tests the whole modelling approach across many periods:
-- at each quarterly cutoff from 2025 Q1, train on markets resolved before it (ADR-024 protocol) and predict markets resolving in the next quarter (rows dated after the cutoff only);
-- pool the predictions and score them against the market, per quarter and overall.
-
-It answers what one window can't:
-- whether the edge over the market is stable across periods or specific to July–September 2026;
-- in which conditions the models fail;
-- how fast a model goes stale (so how often to refresh);
-- the normal quarter-to-quarter swing, to read the live track record and to check these promotion tolerances;
-- a check on data not yet used for any decision.
-
-**How:** `analysis/walk_forward.py`, reusing `train.py --params` and `predict()`. Roughly 30 min per quarter with fixed settings. Run it once, then whenever settings are re-tuned or features change, never inside routine refreshes.
-
-**Two rules from the source:**
-- never develop the model against walk-forward results, or they stop being out-of-time;
-- only point-in-time inputs. Google Trends is excluded until its rework, because its scale uses later peaks.
-
+A walk-forward backtest (testing the modelling approach across many past periods) was proposed in the same review. It is parked: see *Parked* in `ROADMAP.md`. It gets its own ADR when it is built.
 
 ## Related ADRs
 

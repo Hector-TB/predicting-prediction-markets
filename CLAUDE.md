@@ -31,11 +31,11 @@ Dataset versions on S3 (ADR-016, manifests in `data/manifests/`): **v1** = the c
 
 ## Next session — start here (in order)
 
-1. ~~**Train on v3**~~ ✓ 2026-09-29: LR, XGBoost, RF (Trends variants skipped until the Trends rework, ROADMAP 4c). Predictions on S3 (`predictions/v3/`).
+1. ~~**Train on v3**~~ ✓ 2026-09-29: LR, XGBoost, RF (Trends variants skipped until the Trends rework, ROADMAP *Parked*). Predictions on S3 (`predictions/v3/`).
 2. **Re-score** ✓ `docs/paper/rescore_v3_data.md`: XGBoost/RF beat the market (ΔAUC ≈ +0.014 [+0.009, +0.020]; per-market-weighted ΔAUC +0.011, Δlog-loss −0.013, both CIs clear of zero; LR ≈ market). The edge is ≥ 30 days before close, also within markets of the same length; none in markets > 1 year. Trading survives a 2¢/token cost, but fills at the recorded price are unverified. README results updated (v3 table first, the paper's v1 table kept as published).
 3. ~~**Refresh Supabase**~~ ✓ 2026-09-29.
 4. ~~**Merge** → `main`~~ ✓ PR #1, 2026-09-29.
-5. **Then build:** the one-command refresh + model releases (ROADMAP 4b, ADR-019) with the three checks as gates; then the site prerequisites (ROADMAP 5) and the API/site. Separate tasks: Trends rework, volume to date (ROADMAP 4c). The fixed incremental fetch (ADR-020) is built (branch `incremental-fetch-by-end-date`); a dry run on 2026-09-29 found 737 new markets, including all 692 the coverage check had flagged. They come in with the next real fetch (then snapshots → pipeline → checks → publish v4).
+5. **Now:** the one-command refresh + model releases: ROADMAP step 4 has the build order, and ADR-019's amendment the design. The end-date fetch (ADR-020) is merged (PR #2); its dry run found 737 new markets, which the first refresh turns into v4 → candidate `r2`. After that: site prerequisites and API (ROADMAP 5–6). Unscheduled work (walk-forward backtest, Trends rework, volume to date, realistic fills) is under *Parked* in ROADMAP.md.
 
 ## Key conventions
 
@@ -61,6 +61,7 @@ Dataset versions on S3 (ADR-016, manifests in `data/manifests/`): **v1** = the c
 
 ## What NOT to do
 
+- Do not leave a new idea, follow-up or "later" item only in chat or in an ADR: add it to `ROADMAP.md` right away (under its step, or *Parked*). ADRs record decisions, the roadmap holds the plan
 - Do not modify `data/*.parquet` directly — they live on S3, manage with `data/sync.py`
 - Prediction CSVs (`models/*/predictions/*.csv`) are gitignored and live on S3: after a training run, `python scripts/sync_predictions.py push`; to fetch, `pull --version v3`
 - Never overwrite or delete a published dataset version on S3 — publish a new one (ADR-016)
