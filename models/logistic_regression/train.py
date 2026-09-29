@@ -19,7 +19,6 @@ import joblib
 from sklearn.compose import ColumnTransformer
 from sklearn.impute import SimpleImputer
 from sklearn.linear_model import LogisticRegression
-from sklearn.metrics import roc_auc_score
 from sklearn.pipeline import Pipeline
 from sklearn.preprocessing import OneHotEncoder, StandardScaler
 
@@ -28,6 +27,7 @@ sys.path.insert(0, str(ROOT))
 
 from models.common.evaluation import (  # noqa: E402
     check_calibration,
+    compute_metrics,
     dataset_version,
     evaluate,
     evaluate_by_category,
@@ -97,7 +97,7 @@ def run_grid_search(X_fit, y_fit, w_fit, X_hold, y_hold) -> dict:
         params = {"clf__C": c, "clf__penalty": penalty, "clf__solver": solver}
         pipe = build_pipeline().set_params(**params)
         pipe.fit(X_fit, y_fit, clf__sample_weight=w_fit)
-        auc = roc_auc_score(y_hold, pipe.predict_proba(X_hold)[:, 1])
+        auc = compute_metrics(y_hold, pipe.predict_proba(X_hold)[:, 1])["auc"]
         log.info("  [%2d/%d]  C=%-6g  %s  →  AUC=%.4f%s", i, len(GRID), c, penalty, auc, " *" if auc > best_auc else "")
         if auc > best_auc:
             best_auc, best_params = auc, params

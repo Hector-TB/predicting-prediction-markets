@@ -5,6 +5,7 @@ Used by the /evaluate skill and for ad-hoc comparison.
     python scripts/print_metrics.py
 """
 
+import json
 import sys
 from pathlib import Path
 
@@ -30,6 +31,7 @@ SOURCES = [
 ]
 
 BASELINE_PATH = ROOT / "data" / "polymarket_ml_dataset_clean.parquet"
+MANIFEST      = ROOT / "data" / "manifest.json"
 
 
 def compute(y, p):
@@ -45,6 +47,9 @@ def compute(y, p):
 
 def main():
     cache: dict[Path, pd.DataFrame] = {}
+    # Only compare predictions made on the local dataset version (ADR-016)
+    version = json.loads(MANIFEST.read_text())["version"] if MANIFEST.exists() else None
+    print(f"\n  Dataset: {version or 'unknown (no data/manifest.json)'}")
 
     # Market baseline — load from parquet if CSV not available
     baseline = None
@@ -76,6 +81,11 @@ def main():
 
         if prob_col not in df.columns:
             print(f"  {label:<22}  (column '{prob_col}' not found)")
+            continue
+
+        file_version = str(df["dataset_version"].iloc[0]) if "dataset_version" in df.columns else "v1"
+        if version and file_version != version:
+            print(f"  {label:<22}  (trained on {file_version}, not {version} — retrain)")
             continue
 
         m = compute(df["outcome"].values, df[prob_col].values)

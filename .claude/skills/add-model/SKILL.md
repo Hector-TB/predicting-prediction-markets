@@ -21,13 +21,16 @@ models/$ARGUMENTS/
    - `ROOT = Path(__file__).resolve().parent.parent.parent`
    - `DATA_DIR = ROOT / "data"`
    - Import `evaluate`, `check_calibration`, `find_optimal_threshold` from `models.common.evaluation`
-   - Read from `DATA_DIR / "polymarket_ml_dataset_clean.parquet"` (or with_trends version)
-   - Use `class_weight='balanced'` or equivalent
-   - Write predictions to `predictions/predictions.csv` with columns: `market_id`, `snapshot_timestamp`, `outcome`, `split`, and the probability column(s)
+   - Follow the shared training protocol (ADR-024): `load_dataset`, `split_holdout`, `market_weights`,
+     `fit_calibrator` from `models.common.training`. Choose settings by AUC on the holdout, calibrate and
+     pick the threshold on the holdout, score the test set once
+   - Use `class_weight='balanced'` or equivalent, plus `sample_weight=market_weights(...)`
+   - Write predictions to `predictions/predictions.csv` with columns: `market_id`, `snapshot_timestamp`, `outcome`, `dataset_version` (from `models.common.evaluation.dataset_version()`), and the probability column(s)
    - Use logging, not bare print()
 
 3. After creating `train.py`, add the new model to:
    - `scripts/print_metrics.py` SOURCES list (with the prob column name)
+   - `analysis/rescore_paper.py` MODELS list
    - `db/load_parquet.py` `load_model_runs()` sources list (with dataset_tag)
    - `README.md` Results table
 

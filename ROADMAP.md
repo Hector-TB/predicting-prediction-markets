@@ -27,18 +27,18 @@ parquet output in `fix_dataset.py`; dynamic `HARD_CUTOFF` + single-file input in
 
 ### 3. ~~Write `train.py` for random forest~~ ✓ DONE
 `models/random_forest/train.py` and `models/random_forest_trends/train.py` written.
-Both follow the gradient_boosting pattern: combined sample weights, 5-fold CV, isotonic calibration.
+Both follow the shared training protocol (ADR-024) since 2026-09-29.
 
 ### 4. Retrain all models on v3 and re-score the paper
 - ~~Unify the training protocol~~ ✓ 2026-09-29 (ADR-024): time-ordered holdout, one weight per market,
   LR now calibrated. v2 dropped from the plan (superseded by v3)
-- Train LR ✓, XGBoost and RF on v3, one at a time. Trends variants (LR/XGBoost `--trends`, RF + Trends)
-  skipped until the Trends rework below
-- Run `python analysis/rescore_paper.py` for each: does the paper's RQ1 gain survive the
-  leak-free setup (ADR-014, ADR-021)? Do the models add anything in the last 14 days (the "time left" table)?
-  (evaluation rules: ADR-015)
-- Run `/evaluate` and compare new vs old metrics
-- Push predictions to S3 after each run (`python scripts/sync_predictions.py push`); refresh the DB (`python db/load_parquet.py`)
+- ~~Train LR, XGBoost and RF on v3~~ ✓ 2026-09-29. Predictions on S3 (`predictions/v3/`). Trends variants
+  (LR/XGBoost `--trends`, RF + Trends) skipped until the Trends rework below
+- ~~Re-score~~ ✓ `docs/paper/rescore_v3_data.md`, README results updated: XGBoost/RF beat the market
+  (+0.014 AUC, CI above zero), with all of the gain ≥ 30 days before close; LR is level with the market
+- Extra metrics for the re-score (see below): CIs on log-loss/Brier differences, market-weighted scores,
+  time left × duration, trading with costs
+- Refresh the DB (`python db/load_parquet.py`)
 
 ---
 

@@ -21,8 +21,7 @@ The course paper (research questions, methods, reported results) is `docs/paper/
 Dataset versions on S3 (ADR-016, manifests in `data/manifests/`): **v1** = the course paper's data; **v2** = full re-fetch + leakage filter + split by resolution time (ADR-013/014/021); **v3 (LATEST)** = v2 without the 14-day pre-close cutoff, metadata matched to Gamma (ADR-022/023). Local `data/` holds v3.
 
 - v3: 45,130 markets; 2,534,852 clean snapshots (train 2,038,895 / 23,120 markets; test 196,977 / 4,924; `test_pre_cutoff` 298,980 unused); cutoff T = 2026-07-01 07:11 UTC. Coverage check: 0 markets missed; full quality check passed
-- Models have **not** been retrained on v3 yet; the README results are still the paper's (v1). v2 won't be trained (superseded by v3: its metadata had estimated dates)
-- Training scripts now share one protocol (ADR-024, `models/common/training.py`); smoke-tested on a 3% sample, not yet run in full
+- LR, XGBoost and RF trained on v3 under one protocol (ADR-024, `models/common/training.py`); re-score in `docs/paper/rescore_v3_data.md`. README results are still the paper's (v1). v2 won't be trained (superseded by v3)
 - Gates before any publish: `meta_checks.py` (in the pipeline), `scripts/coverage_check.py`, `scripts/check_snapshots.py`
 - Leftovers to delete when convenient (user said no rush): `data/polymarket_ml_dataset.v2.csv` (on S3 staging), `data/*.bak.csv`, `data/*_part[12]*.parquet`, `s3://…/staging/2026-09-27/` and `staging/2026-09-28-v3/`
 - Supabase (free tier): still holds v1. `db/load_parquet.py` now upserts. Re-check tables after any unpause before assuming data loss
@@ -32,8 +31,8 @@ Dataset versions on S3 (ADR-016, manifests in `data/manifests/`): **v1** = the c
 
 ## Next session — start here (in order)
 
-1. **Train on v3**, one model at a time: LR ✓ (AUC 0.8014 vs market 0.7986; log-loss 0.5223 vs 0.5171), then XGBoost, then RF. **Trends variants skipped** until the Trends rework (ROADMAP 4c). Only apply memory fixes if a run is killed (exit 137).
-2. **Re-score:** `python3 analysis/rescore_paper.py --out docs/paper/rescore_v3_data.md`. Key questions: does the paper's gain over the market survive the leak-free setup, and do the models add anything in the last 14 days (the "time left" table)? Report the YES-rate rise (train 25%, test 38%) next to log-loss. Then update the README results (neutral tone, see memory).
+1. ~~**Train on v3**~~ ✓ 2026-09-29: LR, XGBoost, RF (Trends variants skipped until the Trends rework, ROADMAP 4c). Predictions on S3 (`predictions/v3/`).
+2. **Re-score** ✓ `docs/paper/rescore_v3_data.md`: XGBoost/RF beat the market (ΔAUC ≈ +0.014, 95% CI ≈ [+0.009, +0.020]; LR doesn't). The edge is entirely ≥ 30 days before close; in the last 30 days models ≈ market. README results updated (v3 table first, the paper's v1 table kept as published).
 3. **Refresh Supabase:** `python3 db/load_parquet.py`.
 4. **Merge** `pipeline-leakage-and-categories` → `main` (or open a PR).
 5. **Then build:** the one-command refresh + model releases (ROADMAP 4b, ADR-019) with the three checks as gates; the fixed incremental fetch (ADR-020; don't run a plain incremental `fetch_markets.py` before it); then the site prerequisites (ROADMAP 5) and the API/site. Separate tasks: Trends rework, volume to date (ROADMAP 4c). 692 markets closed after the 25 Sep fetch will come in with the next fetch.

@@ -60,8 +60,8 @@ predicting-prediction-markets/
 │   ├── fix_leakage.py                 # Step 8: remove post-close and settled snapshots; mark pre-cutoff test rows
 │   └── stream_parquet.py              # batch-at-a-time parquet I/O (the dataset doesn't fit in 8 GB RAM)
 ├── models/
-│   ├── common/                        # shared evaluation utilities (evaluation.py)
-│   ├── logistic_regression/           # train.py + notebook + predictions/
+│   ├── common/                        # shared training protocol (training.py) + evaluation utilities (evaluation.py)
+│   ├── logistic_regression/           # train.py + notebook + predictions/ (CSVs on S3)
 │   ├── gradient_boosting/             # XGBoost: train.py + notebook + predictions/
 │   ├── random_forest/                 # train.py + notebook + predictions/
 │   ├── random_forest_trends/          # train.py + notebook + predictions/
@@ -69,6 +69,7 @@ predicting-prediction-markets/
 │   └── lightgbm/                      # placeholder (not yet implemented)
 ├── scripts/
 │   ├── print_metrics.py               # metrics table for all models vs the market baseline
+│   ├── sync_predictions.py            # push/pull test-set prediction CSVs to/from S3
 │   ├── recompute_split.py             # 80/20 split by resolution time (ADR-021)
 │   ├── refresh_meta.py                # repair market metadata from Gamma (ADR-023)
 │   ├── coverage_check.py              # are any qualifying markets missing? (by end date, ADR-020)
@@ -150,13 +151,40 @@ python scripts/print_metrics.py      # all models vs the market baseline
 python analysis/rescore_paper.py     # the paper's comparisons: shared test rows, market-level CIs (ADR-015)
 ```
 
-All models train on the leakage-filtered `_clean` parquet files. Shared evaluation utilities (AUC-ROC, PR-AUC, log-loss, Brier, calibration) are in `models/common/evaluation.py`.
+All models train on the leakage-filtered `_clean` parquet files and follow one protocol (ADR-024, `models/common/training.py`):
+
+- **Holdout by time:** the newest 20% of training markets (by resolution time) are held out, mirroring the train/test split.
+- **One weight per market:** each snapshot is weighted by 1 / its market's snapshot count, so long-running markets don't dominate. This is on top of class balancing.
+- **Settings, calibration and threshold** are chosen on the holdout. Calibration is isotonic, bounded to [0.001, 0.999]. The test set is scored once.
+
+Shared evaluation utilities (AUC-ROC, PR-AUC, log-loss, Brier, calibration) are in `models/common/evaluation.py`. Prediction CSVs are not in git: after training, `python scripts/sync_predictions.py push`; to fetch them, `python scripts/sync_predictions.py pull --version v3`.
 
 ---
 
-## Results (course paper, test set of 288,490 snapshots across 4,174 markets)
+## Results
 
-> These are the results reported in the course paper, on the v1 dataset. The models are being retrained on the current dataset (v3), and this section will be updated with the new results.
+### Current data (v3: 196,977 test snapshots across 4,924 markets)
+
+Models trained on dataset v3 under the shared protocol (ADR-024). Every model and the market price are scored on the same test snapshots. Confidence intervals come from resampling whole markets (ADR-015). Full report: [`docs/paper/rescore_v3_data.md`](docs/paper/rescore_v3_data.md).
+
+| Model | AUC-ROC | PR-AUC | Log-loss | Brier | ΔAUC vs market [95% CI] |
+|---|---|---|---|---|---|
+| Market price (baseline) | 0.7986 | 0.7390 | 0.5171 | 0.1727 | — |
+| Logistic regression | 0.8014 | 0.7281 | 0.5223 | 0.1730 | +0.003 [−0.001, +0.007] |
+| **XGBoost** | **0.8127** | **0.7414** | 0.5105 | **0.1692** | **+0.014 [+0.009, +0.020]** |
+| Random forest | 0.8122 | 0.7374 | **0.5097** | **0.1692** | +0.014 [+0.009, +0.019] |
+
+The Google Trends variants are not trained on v3; the Trends features are being reworked first (ROADMAP 4c).
+
+**Findings:**
+- **RQ1:** XGBoost and random forest rank outcomes better than the market price (+0.014 AUC, confidence interval above zero) and have lower log-loss and Brier scores. Logistic regression is level with the market.
+- **RQ3, lifecycle:** the models' gain is concentrated in snapshots taken **30 or more days before the scheduled close** (AUC 0.856 for XGBoost vs 0.823 for the market). In the last 30 days the models match the market, and in the last week they are slightly behind it.
+- **Trading simulation** (trade when model and market differ by more than 2 points; no fees or slippage): XGBoost and random forest return about 8% per snapshot traded (95% CI roughly 5–11%), against about 1% for always buying NO. With one trade per market, all three models return 6–8% against 4% for always-NO.
+- **Base rate drift:** the share of markets resolving YES has risen over time (25% of training snapshots, 38% of test snapshots). AUC is unaffected by this. Log-loss and calibration are affected, which is why calibration uses the most recent training markets (ADR-024).
+
+### Course paper results (v1: 288,490 test snapshots across 4,174 markets)
+
+As reported in the course paper (`docs/paper/paper.tex`), on the v1 dataset with that project's split and training setup.
 
 The baseline is the market price itself (`price_at_snapshot` as a probability), scored on the same test set.
 
@@ -176,13 +204,13 @@ SVM (AUC ≈ 0.94) was scored on a different subsample (7 lifetime-percentile sn
 - **RQ1:** Tree models beat the market on every metric (best: +0.014 AUC, −0.027 log-loss). Logistic regression doesn't, which suggests the signal comes from non-linear interactions between price, lifecycle position and volatility.
 - **RQ2:** Google Trends adds small, consistent gains for tree models (+0.001–0.002 AUC), mostly in geopolitics and finance.
 - **RQ3:** The models add the most early in a market's life (+0.016–0.019 AUC over the market in the first third, shrinking to +0.003–0.006 in the last third).
-- **Trading simulation:** trading on the gap between model and market price was profitable in backtests, ahead of an always-buy-NO strategy (no fees or slippage modelled). Updated figures will follow the v3 re-score.
+- **Trading simulation:** trading on the gap between model and market price was profitable in backtests, ahead of an always-buy-NO strategy (no fees or slippage modelled).
 
 ---
 
 ## Dataset
 
-> The figures in this section describe the current dataset, **v3**. The results above are the paper's, on v1 (20,948 markets, 1,448,142 snapshots).
+> The figures in this section describe the current dataset, **v3**. The course paper used v1 (20,948 markets, 1,448,142 snapshots).
 
 ### Canonical files (on S3 — fetch with `python data/sync.py pull`; see ADR-016 for versions)
 
@@ -237,7 +265,7 @@ The test set only contains markets that have resolved, so it leans towards short
 
 ### Class Imbalance
 
-80.3% of markets resolve NO. A trivial always-NO classifier achieves ~78% accuracy — making raw accuracy misleading. **Primary metrics: AUC-ROC and log-loss.** All models use `class_weight='balanced'` or equivalent. See ADR-007.
+80.3% of markets resolve NO. A trivial always-NO classifier achieves ~78% accuracy — making raw accuracy misleading. **Primary metrics: AUC-ROC and log-loss.** All models use `class_weight='balanced'` or equivalent, plus one weight per market (ADR-024). See ADR-007.
 
 ### Google Trends Enrichment
 

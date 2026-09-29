@@ -23,7 +23,6 @@ import joblib
 import numpy as np
 import pandas as pd
 from sklearn.ensemble import RandomForestClassifier
-from sklearn.metrics import roc_auc_score
 from sklearn.preprocessing import OrdinalEncoder
 
 ROOT          = Path(__file__).resolve().parent.parent.parent
@@ -35,6 +34,7 @@ from models.common.evaluation import (  # noqa: E402
     dataset_version,
     analyze_market_disagreements,
     check_calibration,
+    compute_metrics,
     evaluate,
     evaluate_by_category,
     find_optimal_threshold,
@@ -98,7 +98,7 @@ def run_grid_search(
     for i, (depth, leaf) in enumerate(combos, 1):
         clf = RandomForestClassifier(**{**RF_BASE, "n_estimators": 100}, max_depth=depth, min_samples_leaf=leaf)
         clf.fit(X_fit, y_fit, sample_weight=w_fit)
-        auc = roc_auc_score(y_hold, clf.predict_proba(X_hold)[:, 1])
+        auc = compute_metrics(y_hold, clf.predict_proba(X_hold)[:, 1])["auc"]
         log.info("  [%2d/%d]  depth=%-3d  leaf=%-4d  AUC=%.4f%s",
                  i, len(combos), depth, leaf, auc, " *" if auc > best_auc else "")
         if auc > best_auc:

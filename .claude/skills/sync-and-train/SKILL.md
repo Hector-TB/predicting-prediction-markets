@@ -44,13 +44,19 @@ If it fails, stop and diagnose before training.
 ## 4. Train all models
 
 ```bash
-python3 models/logistic_regression/train.py
-python3 models/logistic_regression/train.py --trends
-python3 models/gradient_boosting/train.py
-python3 models/gradient_boosting/train.py --trends
-python3 models/random_forest/train.py
-python3 models/random_forest_trends/train.py
-python3 models/svm/svm.py && python3 models/svm/svm_evaluate.py
+python3 models/logistic_regression/train.py      # ~15 min
+python3 models/gradient_boosting/train.py        # ~1.5 h (27-setting grid)
+python3 models/random_forest/train.py            # ~1–2 h
+```
+
+One at a time (8 GB RAM; each peaks around 3 GB). Trends variants (`--trends`,
+`random_forest_trends/train.py`) are skipped until the Trends rework (ROADMAP 4c). SVM is
+not part of the shared protocol (ADR-024) and isn't re-scored.
+
+Push the predictions to S3 after each run:
+
+```bash
+python3 scripts/sync_predictions.py push
 ```
 
 ## 5. Review results
@@ -64,8 +70,9 @@ python3 analysis/rescore_paper.py --out docs/paper/rescore_<version>_data.md
 
 ## 6. Record results
 
-Prediction CSVs are tracked in git — commit them. Model runs in the DB are tagged with the
-dataset version (`clean_<version>`), so re-run `python3 db/load_parquet.py` after training.
+Prediction CSVs are not in git; they live on S3 (`scripts/sync_predictions.py`, ADR-019 amendment).
+Commit the re-score report. Model runs in the DB are tagged with the dataset version
+(`clean_<version>`), so re-run `python3 db/load_parquet.py` after training.
 
 ## Notes
 
