@@ -51,6 +51,15 @@ The project's central question (RQ1) is whether models beat the market price. Re
 - **The paper's trading ROI claims (27.5%, 48% at day 11) are overstated** and should not be quoted. Corrected: 12.7% per snapshot, 11.2% one per market, vs 7.3% / 5.7% for always-buy-NO.
 - All results must be re-measured on the ADR-013/014 dataset; this ADR fixes how, not what the numbers will be.
 
+## Amendment (2026-09-29): more comparisons in the re-score
+
+`analysis/rescore_paper.py` now also reports:
+
+1. **Market-level CIs on the log-loss and Brier differences** (`bootstrap_loss_diff`), not just on ΔAUC. Log-loss is a primary metric, so its gap needs an interval too.
+2. **Every comparison with each market counted once**: snapshot weight 1 / its market's snapshot count, matching training (ADR-024). The row-weighted numbers stay the headline; the weighted ones show whether the result rests on a few long markets.
+3. **Time left before close, split by market duration.** Only longer markets have snapshots ≥ 30 days out, so the plain time-left table confounds the two.
+4. **Trading over thresholds (τ = 0.02, 0.05, 0.10) and costs per token (0, 1, 2 cents).** YES costs p + c, NO costs 1 − p + c. Fills at the recorded price remain an assumption: we have no order-book data.
+
 ## Related ADRs
 
 - ADR-001: Temporal train/test split (defines the test set)
