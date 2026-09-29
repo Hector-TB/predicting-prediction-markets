@@ -16,6 +16,8 @@ import pathlib
 import sys
 
 import joblib
+import numpy as np
+import pandas as pd
 from sklearn.compose import ColumnTransformer
 from sklearn.impute import SimpleImputer
 from sklearn.linear_model import LogisticRegression
@@ -61,6 +63,13 @@ TARGET = "outcome"
 # (C, penalty, solver)
 GRID = [(c, "l2", "lbfgs") for c in [0.01, 0.1, 1.0, 10.0, 100.0]] + \
        [(c, "l1", "liblinear") for c in [0.01, 0.1, 1.0, 10.0, 100.0]]
+
+
+def predict(artifact: dict, df: pd.DataFrame) -> np.ndarray:
+    """Calibrated P(YES) for each row of `df` from a saved artifact (used by releases, ADR-019)."""
+    features = artifact.get("features", NUMERIC_FEATURES + CATEGORICAL_FEATURES)
+    X = df[features].assign(category=df["category"].fillna("other"))
+    return artifact["calibrator"].transform(artifact["pipeline"].predict_proba(X)[:, 1])
 
 
 def build_pipeline():
@@ -155,7 +164,8 @@ def main():
 
     ARTIFACTS_DIR.mkdir(parents=True, exist_ok=True)
     model_path = ARTIFACTS_DIR / f"model{suffix}.joblib"
-    joblib.dump({"pipeline": pipeline, "calibrator": iso, "threshold": optimal_threshold}, model_path)
+    joblib.dump({"pipeline": pipeline, "calibrator": iso, "threshold": optimal_threshold,
+                 "features": FEATURES, "params": best_params}, model_path)
     log.info("\nModel saved to %s", model_path)
 
     PREDICTIONS_DIR.mkdir(parents=True, exist_ok=True)

@@ -17,6 +17,8 @@ import pathlib
 import sys
 
 import joblib
+import numpy as np
+import pandas as pd
 from sklearn.compose import ColumnTransformer
 from sklearn.impute import SimpleImputer
 from sklearn.preprocessing import OneHotEncoder
@@ -62,6 +64,14 @@ GRID = {
     "max_depth":        [4, 6, 8],
     "min_child_weight": [5, 10, 20],
 }
+
+
+def predict(artifact: dict, df: pd.DataFrame) -> np.ndarray:
+    """Calibrated P(YES) for each row of `df` from a saved artifact (used by releases, ADR-019)."""
+    features = artifact.get("features", NUMERIC_FEATURES + CATEGORICAL_FEATURES)
+    X = df[features].assign(category=df["category"].fillna("other"))
+    raw = artifact["clf"].predict_proba(artifact["preprocessor"].transform(X))[:, 1]
+    return artifact["calibrator"].transform(raw)
 
 
 def build_preprocessor():
@@ -174,7 +184,8 @@ def main():
 
     ARTIFACTS_DIR.mkdir(parents=True, exist_ok=True)
     model_path = ARTIFACTS_DIR / f"model{suffix}.joblib"
-    joblib.dump({"preprocessor": preprocessor, "clf": clf, "calibrator": iso, "threshold": optimal_threshold},
+    joblib.dump({"preprocessor": preprocessor, "clf": clf, "calibrator": iso, "threshold": optimal_threshold,
+                 "features": FEATURES, "params": {**best_params, "n_estimators": clf.best_iteration + 1}},
                 model_path)
     log.info("\nModel saved to %s", model_path)
 

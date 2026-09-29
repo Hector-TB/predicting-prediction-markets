@@ -72,7 +72,23 @@ RF_BASE = dict(
 )
 
 
-def load_and_split(trends: bool = False) -> tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame]:
+def encode_categories(df: pd.DataFrame, enc: OrdinalEncoder) -> np.ndarray:
+    return enc.transform(df[["category"]].fillna("other")).astype(np.float32).ravel()
+
+
+def predict(artifact: dict, df: pd.DataFrame) -> np.ndarray:
+    """
+    Calibrated P(YES) for each row of `df` from rf_full_calibrated.pkl (used by releases, ADR-019).
+    The artifact must carry the category encoder it was trained with: codes depend on the
+    category set, so refitting one on new data could silently shift them.
+    """
+    features = artifact.get("features", FEATURES_FULL)
+    assert features[-1] == "category_encoded"
+    X = np.column_stack([df[features[:-1]].to_numpy(np.float32), encode_categories(df, artifact["encoder"])])
+    return artifact["iso"].transform(artifact["rf"].predict_proba(X)[:, 1])
+
+
+def load_and_split(trends: bool = False) -> tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame, OrdinalEncoder]:
     df = load_dataset(trends=trends)
     enc = OrdinalEncoder(handle_unknown="use_encoded_value", unknown_value=-1)
     df["category_encoded"] = enc.fit_transform(df[["category"]]).astype(np.float32)
@@ -83,7 +99,7 @@ def load_and_split(trends: bool = False) -> tuple[pd.DataFrame, pd.DataFrame, pd
     assert not (set(train["market_id"]) & set(test["market_id"])), "Leakage detected"
 
     fit, holdout = split_holdout(train)
-    return fit, holdout, test
+    return fit, holdout, test, enc
 
 
 def run_grid_search(
@@ -129,7 +145,7 @@ def main():
     ARTIFACTS_DIR.mkdir(parents=True, exist_ok=True)
     PREDICTIONS_DIR.mkdir(parents=True, exist_ok=True)
 
-    fit, holdout, test = load_and_split()
+    fit, holdout, test, enc = load_and_split()
 
     y_fit  = fit[TARGET].values.astype(np.int32)
     y_hold = holdout[TARGET].values.astype(np.int32)
@@ -164,7 +180,9 @@ def main():
 
     # Threshold chosen on the holdout — never on the test set (ADR-021)
     threshold, _ = find_optimal_threshold(y_hold, iso.transform(p_hold_raw))
-    joblib.dump({"rf": rf_full, "iso": iso, "threshold": threshold}, ARTIFACTS_DIR / "rf_full_calibrated.pkl")
+    joblib.dump({"rf": rf_full, "iso": iso, "threshold": threshold, "encoder": enc,
+                 "features": FEATURES_FULL, "params": best_params},
+                ARTIFACTS_DIR / "rf_full_calibrated.pkl")
     log.info("  Saved rf_full_calibrated.pkl")
 
     proba_price = rf_price.predict_proba(X_test_price)[:, 1]
