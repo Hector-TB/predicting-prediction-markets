@@ -32,7 +32,7 @@ Dataset versions on S3 (ADR-016, manifests in `data/manifests/`): **v1** = the c
 ## Next session — start here (in order)
 
 1. ~~**Train on v3**~~ ✓ 2026-09-29: LR, XGBoost, RF (Trends variants skipped until the Trends rework, ROADMAP 4c). Predictions on S3 (`predictions/v3/`).
-2. **Re-score** ✓ `docs/paper/rescore_v3_data.md`: XGBoost/RF beat the market (ΔAUC ≈ +0.014, 95% CI ≈ [+0.009, +0.020]; LR doesn't). The edge is entirely ≥ 30 days before close; in the last 30 days models ≈ market. README results updated (v3 table first, the paper's v1 table kept as published).
+2. **Re-score** ✓ `docs/paper/rescore_v3_data.md`: XGBoost/RF beat the market (ΔAUC ≈ +0.014 [+0.009, +0.020]; per-market-weighted ΔAUC +0.011, Δlog-loss −0.013, both CIs clear of zero; LR ≈ market). The edge is ≥ 30 days before close, also within markets of the same length; none in markets > 1 year. Trading survives a 2¢/token cost, but fills at the recorded price are unverified. README results updated (v3 table first, the paper's v1 table kept as published).
 3. **Refresh Supabase:** `python3 db/load_parquet.py`.
 4. **Merge** `pipeline-leakage-and-categories` → `main` (or open a PR).
 5. **Then build:** the one-command refresh + model releases (ROADMAP 4b, ADR-019) with the three checks as gates; the fixed incremental fetch (ADR-020; don't run a plain incremental `fetch_markets.py` before it); then the site prerequisites (ROADMAP 5) and the API/site. Separate tasks: Trends rework, volume to date (ROADMAP 4c). 692 markets closed after the 25 Sep fetch will come in with the next fetch.

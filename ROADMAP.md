@@ -36,8 +36,8 @@ Both follow the shared training protocol (ADR-024) since 2026-09-29.
   (LR/XGBoost `--trends`, RF + Trends) skipped until the Trends rework below
 - ~~Re-score~~ ✓ `docs/paper/rescore_v3_data.md`, README results updated: XGBoost/RF beat the market
   (+0.014 AUC, CI above zero), with all of the gain ≥ 30 days before close; LR is level with the market
-- Extra metrics for the re-score (see below): CIs on log-loss/Brier differences, market-weighted scores,
-  time left × duration, trading with costs
+- ~~Extra re-score metrics~~ ✓ CIs on log-loss/Brier differences, market-weighted scores, time left × duration,
+  trading with costs and thresholds
 - Refresh the DB (`python db/load_parquet.py`)
 
 ---

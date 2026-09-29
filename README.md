@@ -167,19 +167,27 @@ Shared evaluation utilities (AUC-ROC, PR-AUC, log-loss, Brier, calibration) are 
 
 Models trained on dataset v3 under the shared protocol (ADR-024). Every model and the market price are scored on the same test snapshots. Confidence intervals come from resampling whole markets (ADR-015). Full report: [`docs/paper/rescore_v3_data.md`](docs/paper/rescore_v3_data.md).
 
-| Model | AUC-ROC | PR-AUC | Log-loss | Brier | ΔAUC vs market [95% CI] |
+| Model | AUC-ROC | PR-AUC | Log-loss | Brier |
+|---|---|---|---|---|
+| Market price (baseline) | 0.7986 | 0.7390 | 0.5171 | 0.1727 |
+| Logistic regression | 0.8014 | 0.7281 | 0.5223 | 0.1730 |
+| **XGBoost** | **0.8127** | **0.7414** | 0.5105 | **0.1692** |
+| Random forest | 0.8122 | 0.7374 | **0.5097** | **0.1692** |
+
+Differences from the market, 95% CI (negative log-loss/Brier = better than the market). "Per market" weights each snapshot by 1 / its market's snapshot count, so every market counts once:
+
+| Model | ΔAUC | ΔLog-loss | ΔBrier | ΔAUC, per market | ΔLog-loss, per market |
 |---|---|---|---|---|---|
-| Market price (baseline) | 0.7986 | 0.7390 | 0.5171 | 0.1727 | — |
-| Logistic regression | 0.8014 | 0.7281 | 0.5223 | 0.1730 | +0.003 [−0.001, +0.007] |
-| **XGBoost** | **0.8127** | **0.7414** | 0.5105 | **0.1692** | **+0.014 [+0.009, +0.020]** |
-| Random forest | 0.8122 | 0.7374 | **0.5097** | **0.1692** | +0.014 [+0.009, +0.019] |
+| Logistic regression | +0.003 [−0.001, +0.007] | +0.005 [−0.001, +0.012] | +0.000 [−0.002, +0.002] | +0.004 [+0.001, +0.007] | −0.001 [−0.006, +0.003] |
+| XGBoost | +0.014 [+0.009, +0.020] | −0.007 [−0.014, +0.001] | −0.004 [−0.006, −0.001] | +0.011 [+0.008, +0.014] | −0.013 [−0.018, −0.008] |
+| Random forest | +0.014 [+0.009, +0.019] | −0.007 [−0.014, −0.001] | −0.004 [−0.006, −0.001] | +0.011 [+0.008, +0.014] | −0.014 [−0.019, −0.008] |
 
 The Google Trends variants are not trained on v3; the Trends features are being reworked first (ROADMAP 4c).
 
 **Findings:**
-- **RQ1:** XGBoost and random forest rank outcomes better than the market price (+0.014 AUC, confidence interval above zero) and have lower log-loss and Brier scores. Logistic regression is level with the market.
-- **RQ3, lifecycle:** the models' gain is concentrated in snapshots taken **30 or more days before the scheduled close** (AUC 0.856 for XGBoost vs 0.823 for the market). In the last 30 days the models match the market, and in the last week they are slightly behind it.
-- **Trading simulation** (trade when model and market differ by more than 2 points; no fees or slippage): XGBoost and random forest return about 8% per snapshot traded (95% CI roughly 5–11%), against about 1% for always buying NO. With one trade per market, all three models return 6–8% against 4% for always-NO.
+- **RQ1:** XGBoost and random forest rank outcomes better than the market price (+0.014 AUC, confidence interval above zero) and have lower Brier scores. With each market counted once, both the ranking gain (+0.011) and the log-loss gain (−0.013) are clearly above zero, so the result doesn't rest on a few long markets. Logistic regression is roughly level with the market.
+- **RQ3, lifecycle:** the models' gain comes from snapshots taken **30 or more days before the scheduled close** (AUC 0.856 for XGBoost vs 0.823 for the market). In the last 30 days the models match the market, and in the last week they are slightly behind it. Within markets of the same length the pattern holds: for markets up to 90 days, XGBoost gains +0.024 AUC ≥ 30 days out and none in the final month. In markets longer than a year (142 markets) there is no clear gain.
+- **Trading simulation** (trade when model and market differ by more than τ; one token per trade): with the paper's τ = 0.02 and no costs, XGBoost and random forest return about 8% per snapshot traded (95% CI roughly 5–11%), against about 1% for always buying NO. At a cost of 2 cents per token, returns fall to about 3–5% at τ = 0.02 and stay at 12–16% at τ = 0.10, all with confidence intervals above zero. The simulation assumes trades fill at the recorded price. Large gaps are likely to be more common in thin markets, where that price may not be available.
 - **Base rate drift:** the share of markets resolving YES has risen over time (25% of training snapshots, 38% of test snapshots). AUC is unaffected by this. Log-loss and calibration are affected, which is why calibration uses the most recent training markets (ADR-024).
 
 ### Course paper results (v1: 288,490 test snapshots across 4,174 markets)
