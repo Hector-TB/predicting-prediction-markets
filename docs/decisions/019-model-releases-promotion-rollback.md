@@ -65,6 +65,12 @@ Dataset versions are already immutable (ADR-016). Models need the same.
 - `model_runs` gains a release identifier; model pages and the feed can show backtest and live results per release.
 - The first release (`r1`) will be the v2-trained models once ADR-018 is decided.
 
+## Amendment (2026-09-29): prediction files move to S3 now, before releases exist
+
+Test-set prediction CSVs (`models/*/predictions/*.csv`, 3–40 MB each) were tracked in git; every retrain would add a ~500k-line diff. They are now gitignored and stored at `s3://<bucket>/predictions/<dataset version>/<model>/<file>` with `scripts/sync_predictions.py push | pull | list`. The dataset version comes from each file's `dataset_version` column. The course paper's files (no such column) were uploaded as `v1` and remain in git history up to commit e7e44e1.
+
+This is interim: re-pushing a changed file replaces it, and S3 bucket versioning keeps the old copy. Once releases exist, predictions belong to a release (`models/<release>/`) and are immutable, as decided above.
+
 ## Related ADRs
 
 - ADR-001: Temporal split (why test sets move between versions)

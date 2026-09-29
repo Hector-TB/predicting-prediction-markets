@@ -20,6 +20,9 @@ models/*/artifacts/*.txt
 models/*/artifacts/*.bin
 models/*/artifacts/*.parquet
 
+# Test-set predictions — on S3 via scripts/sync_predictions.py (ADR-019 amendment)
+models/*/predictions/*.csv
+
 # Results JSON (keep these — small and useful to share)
 # models/*/results/*.json  ← intentionally NOT ignored
 

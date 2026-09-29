@@ -28,6 +28,9 @@ DATA_DIR = ROOT / "data"
 TARGET   = "outcome"
 
 HOLDOUT_FRACTION = 0.2
+# Calibrated probabilities never reach exactly 0 or 1: a holdout group that went
+# 53-for-53 is very likely, not certain (ADR-024)
+PROB_FLOOR, PROB_CEIL = 0.001, 0.999
 
 
 def load_dataset(trends: bool = False) -> pd.DataFrame:
@@ -92,7 +95,7 @@ def market_weights(market_ids) -> np.ndarray:
 
 
 def fit_calibrator(p_holdout: np.ndarray, y_holdout: np.ndarray) -> IsotonicRegression:
-    """Isotonic map from raw model scores to probabilities, fitted on the holdout."""
-    iso = IsotonicRegression(out_of_bounds="clip")
+    """Isotonic map from raw model scores to probabilities in [PROB_FLOOR, PROB_CEIL], fitted on the holdout."""
+    iso = IsotonicRegression(y_min=PROB_FLOOR, y_max=PROB_CEIL, out_of_bounds="clip")
     iso.fit(p_holdout, y_holdout)
     return iso

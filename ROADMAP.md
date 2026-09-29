@@ -32,12 +32,13 @@ Both follow the gradient_boosting pattern: combined sample weights, 5-fold CV, i
 ### 4. Retrain all models on v3 and re-score the paper
 - ~~Unify the training protocol~~ ✓ 2026-09-29 (ADR-024): time-ordered holdout, one weight per market,
   LR now calibrated. v2 dropped from the plan (superseded by v3)
-- Train LR and XGBoost with and without `--trends`, RF and RF + Trends, on v3, one at a time
+- Train LR ✓, XGBoost and RF on v3, one at a time. Trends variants (LR/XGBoost `--trends`, RF + Trends)
+  skipped until the Trends rework below
 - Run `python analysis/rescore_paper.py` for each: does the paper's RQ1 gain survive the
   leak-free setup (ADR-014, ADR-021)? Do the models add anything in the last 14 days (the "time left" table)?
   (evaluation rules: ADR-015)
 - Run `/evaluate` and compare new vs old metrics
-- Push updated predictions to S3; refresh the DB (`python db/load_parquet.py`)
+- Push predictions to S3 after each run (`python scripts/sync_predictions.py push`); refresh the DB (`python db/load_parquet.py`)
 
 ---
 

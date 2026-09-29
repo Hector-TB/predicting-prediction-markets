@@ -32,7 +32,7 @@ Dataset versions on S3 (ADR-016, manifests in `data/manifests/`): **v1** = the c
 
 ## Next session — start here (in order)
 
-1. **Train on v3**, one model at a time: LR and XGBoost (each ± `--trends`), RF, RF + Trends. Only apply memory fixes if a run is killed (exit 137).
+1. **Train on v3**, one model at a time: LR ✓ (AUC 0.8014 vs market 0.7986; log-loss 0.5223 vs 0.5171), then XGBoost, then RF. **Trends variants skipped** until the Trends rework (ROADMAP 4c). Only apply memory fixes if a run is killed (exit 137).
 2. **Re-score:** `python3 analysis/rescore_paper.py --out docs/paper/rescore_v3_data.md`. Key questions: does the paper's gain over the market survive the leak-free setup, and do the models add anything in the last 14 days (the "time left" table)? Report the YES-rate rise (train 25%, test 38%) next to log-loss. Then update the README results (neutral tone, see memory).
 3. **Refresh Supabase:** `python3 db/load_parquet.py`.
 4. **Merge** `pipeline-leakage-and-categories` → `main` (or open a PR).
@@ -63,6 +63,7 @@ Dataset versions on S3 (ADR-016, manifests in `data/manifests/`): **v1** = the c
 ## What NOT to do
 
 - Do not modify `data/*.parquet` directly — they live on S3, manage with `data/sync.py`
+- Prediction CSVs (`models/*/predictions/*.csv`) are gitignored and live on S3: after a training run, `python scripts/sync_predictions.py push`; to fetch, `pull --version v3`
 - Never overwrite or delete a published dataset version on S3 — publish a new one (ADR-016)
 - Do not add model-specific evaluation functions — put them in `models/common/evaluation.py`
 - Do not amend commits that have been pushed

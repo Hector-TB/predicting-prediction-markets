@@ -34,7 +34,7 @@ Every model (LR, XGBoost, RF, RF + Trends; ± Trends) follows the same protocol,
 2. **Weights.** Each row gets 1 / (its market's snapshot count), scaled to mean 1, so every market counts once in total. This is on top of the library's class balancing (`class_weight='balanced'` or `scale_pos_weight`, ADR-007).
 3. **Settings are chosen by AUC on the holdout.** XGBoost also early-stops on the holdout AUC. AUC is used because calibration comes afterwards and doesn't change the ranking.
 4. **The final model is fitted on the fit markets** with the chosen settings. It is not refitted on all of train: the holdout must stay unseen by the model so it can be used for calibration.
-5. **Isotonic calibration and the F1 threshold both come from the holdout.**
+5. **Isotonic calibration and the F1 threshold both come from the holdout.** Calibrated probabilities are bounded to [0.001, 0.999] (see Amendment).
 6. **The test set is scored once**, after everything above is fixed.
 
 Prediction files keep their columns. LR now writes `pred_prob_raw` and a calibrated `pred_prob`, like XGBoost.
@@ -67,6 +67,14 @@ Also removed: RF's 5-fold CV (it only printed a number and chose nothing), and `
 - LR's log-loss and trading results change most, because it is now calibrated.
 - SVM (`models/svm/`) is not covered: it uses its own subsample (ADR-006) and is not part of the paper re-score.
 - `analysis/rescore_paper.py` now skips prediction files whose `dataset_version` doesn't match the local data. It also reports AUC by time left before the scheduled close, to show whether v3's late rows help (ADR-022).
+
+## Amendment (2026-09-29): calibrated probabilities bounded to [0.001, 0.999]
+
+The first full LR run on v3 showed that isotonic calibration outputs exactly 0 or 1 at the extremes. In the holdout, every snapshot with a raw score ≥ 0.989 resolved YES (325 rows, only 53 markets), and every one ≤ 0.055 resolved NO (82 rows, 6 markets). So those ranges were mapped to certainty. On test, 1,746 predictions were exactly 0 or 1, and 58 of them (8 markets) were wrong. These were genuine upsets that the market also got wrong at 0.88–0.95. A wrong certain prediction costs ~34 log-loss per row (only limited by floating-point clipping), which moved LR's test log-loss from 0.524 to 0.531.
+
+**Decision:** `fit_calibrator` bounds its output with `IsotonicRegression(y_min=0.001, y_max=0.999)`. A group that went 53-for-53 is very likely, not certain. The penalty for a wrong 0.999 is 6.9, still well above the market's 2.7 at 0.93. The ranking (AUC) and the threshold are unchanged.
+
+**Alternative considered:** bound to the market's own range (0.05–0.95; the price rule of ADR-014 removes snapshots outside it). Rejected: it would stop the model from being more confident than the market, which is part of what is being tested.
 
 ## Related ADRs
 
