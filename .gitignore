@@ -3,7 +3,10 @@
 data/*.parquet
 data/*.csv
 data/fetch_cache/
-data/manifest.json     # which dataset version is checked out locally
+# which dataset version is checked out locally (git has no inline comments)
+data/manifest.json
+# settings of the snapshot build in progress (build_snapshots.py resume guard)
+data/*.build.json
 data/*.bak.csv
 
 # Notebooks
