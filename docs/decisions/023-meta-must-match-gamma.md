@@ -3,7 +3,7 @@
 **Date:** 2026-09-28  
 **Status:** Accepted  
 **Deciders:** Hector Thompson Baroni  
-**Code location:** `data_collection_pipeline/meta_checks.py`, `fetch_markets.py` (`merge_fresh`, `latest_fetch.csv`), `scripts/refresh_meta.py`, checks wired into `run_pipeline.py`, `build_snapshots.py` and `data/sync.py publish`
+**Code location:** `data_collection_pipeline/meta_checks.py`, `fetch_markets.py` (`merge_fresh`, `fetch_cache/fetch_<timestamp>_<mode>.csv`), `scripts/refresh_meta.py`, checks wired into `run_pipeline.py`, `build_snapshots.py` and `data/sync.py publish`
 
 ---
 
@@ -32,7 +32,7 @@ Nothing caught this because an estimated row is internally consistent: its durat
 
 1. **Every Gamma field in meta comes from Gamma, unchanged.** Only `category` (LLM, ADR-008) and `split` (ADR-021) are ours. No field may be estimated, back-filled or given a placeholder. A market whose values can't be fetched is dropped, not approximated.
 2. **Merges take fresh values.** `fetch_markets.merge_fresh()`, used by both full and incremental fetches, replaces every Gamma field of a re-fetched market and keeps only `category` and `split`.
-3. **Keep the evidence.** Each fetch saves its Gamma records to `data/fetch_cache/latest_fetch.csv`; `scripts/refresh_meta.py` saves direct lookups to `lookups.csv`. When files overlap, the newest wins.
+3. **Keep the evidence.** Each fetch saves its Gamma records to `data/fetch_cache/` (one `fetch_<timestamp>_<mode>.csv` per run since ADR-020's amendment); `scripts/refresh_meta.py` saves direct lookups to `lookups.csv`. When files overlap, the newest wins.
 4. **Checks that block the pipeline** (`meta_checks.py`):
    - Internal: no empty required fields; no 0.05 / 0.95 placeholder prices; outcome consistent with the final price; `duration_days` = (end − start) in days; valid split; unique ids.
    - Against Gamma: every Gamma field equals the saved Gamma record, and every market has one. This is the only check that catches plausible invented values.

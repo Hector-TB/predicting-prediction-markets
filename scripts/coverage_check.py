@@ -17,7 +17,7 @@ Exits non-zero if any market was MISSED. Writes the missing markets to
 logs/coverage_<date>.csv.
 
 Usage:
-    python scripts/coverage_check.py [--fetched-on 2026-09-25]
+    python scripts/coverage_check.py [--fetched-on 2026-09-25]   # default: the recorded last fetch
 """
 
 import argparse
@@ -32,7 +32,7 @@ ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT / "data_collection_pipeline"))
 from fetch_markets import (  # noqa: E402
     OUTPUT_META, SLEEP_BETWEEN_CALLS, START_DATE_MIN, _date_windows, _fetch_window,
-    parse_and_filter_markets,
+    last_fetch_time, parse_and_filter_markets,
 )
 
 END_DATE_MAX = "2031-01-01"   # closed markets can carry far-future scheduled end dates
@@ -95,6 +95,10 @@ def main(fetched_on: str) -> int:
 if __name__ == "__main__":
     logging.basicConfig(level=logging.INFO, format="%(message)s")
     parser = argparse.ArgumentParser(description="Check meta covers every qualifying Gamma market")
-    parser.add_argument("--fetched-on", default="2026-09-25",
-                        help="date the meta's markets were fetched (markets closed later count as new)")
-    sys.exit(1 if main(parser.parse_args().fetched_on) else 0)
+    parser.add_argument("--fetched-on",
+                        help="when the meta's markets were fetched (markets closed later count as new); "
+                             "default: data/fetch_state.json, else the dataset manifest (ADR-020)")
+    fetched_on = parser.parse_args().fetched_on or last_fetch_time()
+    if fetched_on is None:
+        sys.exit("ERROR: no recorded fetch time — pass --fetched-on")
+    sys.exit(1 if main(str(fetched_on)) else 0)

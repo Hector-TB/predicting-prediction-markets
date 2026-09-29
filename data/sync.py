@@ -75,6 +75,7 @@ OPTIONAL_FILES = [
     "category_trends_features.parquet",
     "category_trends_raw.csv",
     "market_closed_times.csv",                           # closedTime cache used by the leakage filter
+    "fetch_state.json",                                  # when the markets were fetched (ADR-020)
 ]
 
 VERSION_RE = re.compile(r"^v\d+$")
@@ -252,6 +253,14 @@ def cmd_status(s3, args) -> None:
         log.info("  %-52s %s", fname, state)
 
 
+def fetched_on_default() -> str:
+    """The recorded fetch time (data/fetch_state.json, ADR-020), else the meta CSV's mtime."""
+    state = DATA_DIR / "fetch_state.json"
+    if state.exists():
+        return json.loads(state.read_text())["last_fetch"][:10]
+    return datetime.fromtimestamp((DATA_DIR / META_FILE).stat().st_mtime, timezone.utc).date().isoformat()
+
+
 def cmd_publish(s3, args) -> None:
     version = args.version
     check_new_version(s3, version)
@@ -271,8 +280,7 @@ def cmd_publish(s3, args) -> None:
         "created_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
         "parent":     args.parent,
         "notes":      args.notes or "",
-        "fetched_on": args.fetched_on or datetime.fromtimestamp(
-            (DATA_DIR / META_FILE).stat().st_mtime, timezone.utc).date().isoformat(),
+        "fetched_on": args.fetched_on or fetched_on_default(),
         "code":       {**git_info(), "adrs": adrs_in_effect()},
         "contents":   summarize(DATA_DIR / META_FILE, DATA_DIR / CLEAN_FILE),
         "files":      {},
@@ -388,7 +396,7 @@ def main():
     p.add_argument("version")
     p.add_argument("--parent", help="version this one was derived from, e.g. v1")
     p.add_argument("--notes", help="what changed and why")
-    p.add_argument("--fetched-on", help="date the market list was fetched (default: meta CSV mtime)")
+    p.add_argument("--fetched-on", help="date the market list was fetched (default: data/fetch_state.json, else meta CSV mtime)")
     p.add_argument("--dry-run", action="store_true")
     p = sub.add_parser("freeze-legacy")
     p.add_argument("version")

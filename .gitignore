@@ -7,6 +7,8 @@ data/fetch_cache/
 data/manifest.json
 # settings of the snapshot build in progress (build_snapshots.py resume guard)
 data/*.build.json
+# when the markets were last fetched — published with the dataset version (ADR-020)
+data/fetch_state.json
 data/*.bak.csv
 
 # Notebooks

@@ -31,7 +31,7 @@ python3 data/sync.py publish <next version> --parent <current> --notes "…"
 
 Versions are immutable (ADR-016); `python3 data/sync.py list` shows what exists. The pipeline fetches new resolved markets, refreshes Google Trends, and regenerates the clean parquets. It stops if the market metadata doesn't match Gamma (ADR-023). Don't publish unless both checks pass.
 
-> Until ADR-020's incremental fetch is built, a plain incremental `fetch_markets.py` can miss long-running markets. Run `coverage_check.py` after any fetch.
+> `fetch_markets.py` fetches incrementally by scheduled end date from the recorded last fetch (`data/fetch_state.json`, ADR-020). Preview with `python3 data_collection_pipeline/fetch_markets.py --dry-run`. Run `coverage_check.py` after any fetch.
 
 ## 3. Smoke test — verify data is healthy
 

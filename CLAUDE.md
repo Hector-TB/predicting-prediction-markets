@@ -35,7 +35,7 @@ Dataset versions on S3 (ADR-016, manifests in `data/manifests/`): **v1** = the c
 2. **Re-score** ✓ `docs/paper/rescore_v3_data.md`: XGBoost/RF beat the market (ΔAUC ≈ +0.014 [+0.009, +0.020]; per-market-weighted ΔAUC +0.011, Δlog-loss −0.013, both CIs clear of zero; LR ≈ market). The edge is ≥ 30 days before close, also within markets of the same length; none in markets > 1 year. Trading survives a 2¢/token cost, but fills at the recorded price are unverified. README results updated (v3 table first, the paper's v1 table kept as published).
 3. ~~**Refresh Supabase**~~ ✓ 2026-09-29.
 4. ~~**Merge** → `main`~~ ✓ PR #1, 2026-09-29.
-5. **Then build:** the one-command refresh + model releases (ROADMAP 4b, ADR-019) with the three checks as gates; the fixed incremental fetch (ADR-020; don't run a plain incremental `fetch_markets.py` before it); then the site prerequisites (ROADMAP 5) and the API/site. Separate tasks: Trends rework, volume to date (ROADMAP 4c). 692 markets closed after the 25 Sep fetch will come in with the next fetch.
+5. **Then build:** the one-command refresh + model releases (ROADMAP 4b, ADR-019) with the three checks as gates; then the site prerequisites (ROADMAP 5) and the API/site. Separate tasks: Trends rework, volume to date (ROADMAP 4c). The fixed incremental fetch (ADR-020) is built (branch `incremental-fetch-by-end-date`); a dry run on 2026-09-29 found 737 new markets, including all 692 the coverage check had flagged. They come in with the next real fetch (then snapshots → pipeline → checks → publish v4).
 
 ## Key conventions
 
@@ -111,7 +111,7 @@ Dataset versions on S3 (ADR-016, manifests in `data/manifests/`): **v1** = the c
 - ADR-017: on-demand prediction via search + stored live track record (design: `docs/design/search-and-predict.md`)
 - ADR-018: volume features used final lifetime volume (look-ahead) — dropped (ADR-021)
 - ADR-019: immutable model releases (rN) with change reports, gated promotion, one-command rollback
-- ADR-020: incremental fetch by scheduled end date (≥ last fetch − 30d, no upper bound) — current start-date fetch misses long-running markets; pre-publish coverage check
+- ADR-020: incremental fetch by scheduled end date (≥ last fetch − 30d, no upper bound), last fetch time in `data/fetch_state.json`, fetch files kept as ADR-023 evidence (`--full --resume` to reuse checkpoints), `--dry-run`; pre-publish coverage check
 - ADR-021: leak-free evaluation — split by resolution time + pre-cutoff test rows dropped, thresholds from held-out train data, `log_volume` dropped
 - ADR-022: no 14-day pre-close cutoff from v3 (price rule only); full snapshot rebuild with retries + settings guard
 - ADR-023: meta must match Gamma — no estimated/placeholder values; fresh fetch wins on merge (category/split kept); `meta_checks.py` blocks pipeline/build/publish; repair with `scripts/refresh_meta.py`

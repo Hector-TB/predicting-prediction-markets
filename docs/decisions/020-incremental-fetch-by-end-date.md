@@ -1,9 +1,9 @@
 # ADR-020: Incremental Market Fetch by Scheduled End Date, with a Look-Back
 
 **Date:** 2026-09-28  
-**Status:** Accepted — to be implemented with the one-command refresh (ROADMAP 4b)  
+**Status:** Accepted — implemented 2026-09-29 (see Amendment)  
 **Deciders:** Hector Thompson Baroni  
-**Code location:** `data_collection_pipeline/fetch_markets.py` (`load_existing_meta`, `_fetch_window`, `fetch_filtered_markets`)
+**Code location:** `data_collection_pipeline/fetch_markets.py` (`fetch_incremental`, `in_scope`, `last_fetch_time`, `save_fetch_state`, `fetch_filtered_markets`), `scripts/coverage_check.py`, `data/sync.py`
 
 ---
 
@@ -47,6 +47,18 @@ We only use markets once they have closed, so the fetch has to ask about markets
 
 - Each incremental fetch returns some already-known markets (closed early with future scheduled ends); they are dropped by ID, at a modest cost.
 - Implemented as part of the one-command refresh (ADR-019 / ROADMAP 4b).
+
+## Amendment (2026-09-29): implementation, and fetch files kept as evidence
+
+Implemented ahead of the one-command refresh, because 692 markets have closed since the v3 fetch and the old incremental fetch would miss long-running ones.
+
+- **Incremental (default):** closed markets with scheduled `end_date >= last fetch − 30 days` and no upper bound, walked in monthly windows up to today, then one open-ended window. The full fetch gets its scope from Gamma's `start_date_min`; fetching by end date doesn't apply it, so `in_scope` drops markets whose Gamma `startDate` is before 2023-01-01 (the same scope rule as the coverage check). Markets already in the meta are refreshed with Gamma's current values, as ADR-023 requires, rather than dropped.
+- **Last fetch time:** `data/fetch_state.json` records the *start* of the last successful fetch, so a market that closes mid-run is picked up next time. It is published with each dataset version (`sync.py` optional file) and sets the manifest's `fetched_on`. Fallback: the checked-out manifest's `fetched_on`. With neither, the fetch refuses to guess.
+- **Decision 3 changed: fetch files are kept, not deleted.** ADR-023 made `data/fetch_cache/` the evidence that `meta_checks.py` verifies the meta against, so deleting it after a run would break that check. Instead:
+  - monthly checkpoints are **reused only with `--full --resume`** (continuing an interrupted run); a normal `--full` re-fetches every month and overwrites them;
+  - every run saves its records to its own `fetch_<timestamp>_<mode>.csv` (this replaces the single `latest_fetch.csv`, which each run overwrote); the newest file wins when records overlap.
+- **`--dry-run`** fetches and reports without writing anything.
+- `scripts/coverage_check.py` defaults to the recorded fetch time instead of a hard-coded date.
 
 ## Related ADRs
 

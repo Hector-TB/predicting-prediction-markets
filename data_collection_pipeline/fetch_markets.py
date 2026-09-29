@@ -7,6 +7,20 @@ applies filters, and saves a clean market metadata file.
 Output: polymarket_markets_meta.csv
 
 Run this first, then run build_snapshots.py
+
+Modes:
+  (default)   incremental (ADR-020): closed markets whose *scheduled end date* is
+              on or after (last fetch − 30 days), no upper bound — catches markets
+              that closed on time, early (future end date) or up to 30 days late.
+              The last fetch time comes from data/fetch_state.json, else the
+              local dataset manifest's fetched_on.
+  --full      re-fetch everything since START_DATE_MIN by start date (ADR-013).
+              Monthly checkpoints are only reused with --resume (an interrupted run).
+  --dry-run   fetch and report what would change; write nothing.
+
+Every run saves the Gamma records it used to data/fetch_cache/ (meta_checks.py
+verifies the meta against them, ADR-023) and, when it writes the meta, records
+its start time in data/fetch_state.json.
 """
 
 import argparse
@@ -16,6 +30,7 @@ import pandas as pd
 import numpy as np
 import json
 import time
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Optional
 
@@ -47,8 +62,12 @@ MAX_RETRIES         = 8         # attempts per page; Gamma has multi-minute 500 
 RETRY_BACKOFF       = 5         # seconds before first retry (doubles each attempt)
 RETRY_BACKOFF_MAX   = 60        # cap per wait → ~4 min total before failing loudly
 
+LOOKBACK_DAYS       = 30            # markets closing up to this late after their scheduled end (ADR-020)
+
 OUTPUT_META         = DATA_DIR / "polymarket_markets_meta.csv"
-FETCH_CACHE_DIR     = DATA_DIR / "fetch_cache"   # per-window checkpoints for --full
+FETCH_CACHE_DIR     = DATA_DIR / "fetch_cache"   # Gamma records (evidence, ADR-023) + --full checkpoints
+FETCH_STATE         = DATA_DIR / "fetch_state.json"  # when the meta's markets were last fetched (ADR-020)
+LOCAL_MANIFEST      = DATA_DIR / "manifest.json"
 
 log = logging.getLogger(__name__)
 
@@ -97,19 +116,33 @@ def merge_fresh(existing: pd.DataFrame, fresh: pd.DataFrame) -> tuple[pd.DataFra
     return merged, len(both), len(added)
 
 
-def load_existing_meta() -> tuple:
-    """
-    Returns (existing_df | None, fetch_from_date).
-    fetch_from_date: start_date_min to pass to the API.
-    """
+def load_existing_meta() -> Optional[pd.DataFrame]:
     if not OUTPUT_META.exists():
-        return None, START_DATE_MIN
+        return None
+    df = pd.read_csv(OUTPUT_META, dtype={"clob_token_id": str})
+    print(f"  Found {len(df):,} existing markets")
+    return df
 
-    df = pd.read_csv(OUTPUT_META)
-    df["start_date"] = pd.to_datetime(df["start_date"], utc=True, errors="coerce")
-    fetch_from   = (df["start_date"].max() - pd.Timedelta(days=7)).strftime("%Y-%m-%d")
-    print(f"  Found {len(df):,} existing markets — fetching from {fetch_from}")
-    return df, fetch_from
+
+def last_fetch_time() -> Optional[pd.Timestamp]:
+    """
+    When the markets in the meta were last fetched: data/fetch_state.json, else
+    the checked-out dataset version's `fetched_on` (ADR-016). Stored explicitly,
+    never inferred from the data (ADR-020).
+    """
+    if FETCH_STATE.exists():
+        return pd.Timestamp(json.loads(FETCH_STATE.read_text())["last_fetch"])
+    if LOCAL_MANIFEST.exists():
+        fetched_on = json.loads(LOCAL_MANIFEST.read_text()).get("fetched_on")
+        if fetched_on:
+            return pd.Timestamp(fetched_on, tz="UTC")
+    return None
+
+
+def save_fetch_state(started: pd.Timestamp, mode: str, n_markets: int) -> None:
+    FETCH_STATE.write_text(json.dumps({
+        "last_fetch": started.isoformat(), "mode": mode, "markets": n_markets,
+    }, indent=2) + "\n")
 
 
 # ─────────────────────────────────────────────
@@ -150,11 +183,12 @@ def _date_windows(start: str, end: str, months: int = 1):
         current = wend
 
 
-def _fetch_window(start_date: str, end_date: str, by: str = "start") -> list[dict]:
+def _fetch_window(start_date: str, end_date: Optional[str], by: str = "start") -> list[dict]:
     """Cursor-paginate one date window via /markets/keyset (ADR-013).
 
-    by="start" windows on Gamma's startDate (the fetch); by="end" on endDate
-    (the independent route used by scripts/coverage_check.py, ADR-020).
+    by="start" windows on Gamma's startDate (the full fetch); by="end" on the
+    scheduled endDate (the incremental fetch and scripts/coverage_check.py,
+    ADR-020). end_date=None leaves the window open-ended.
 
     Raises RuntimeError if a page still fails after MAX_RETRIES — a skipped
     page would leave a gap the incremental watermark never revisits.
@@ -168,8 +202,9 @@ def _fetch_window(start_date: str, end_date: str, by: str = "start") -> list[dic
             "limit":          MARKET_FETCH_LIMIT,
             "volume_num_min": VOLUME_NUM_MIN,
             f"{by}_date_min": start_date,
-            f"{by}_date_max": end_date,
         }
+        if end_date:
+            params[f"{by}_date_max"] = end_date
         if cursor:
             params["after_cursor"] = cursor
 
@@ -198,12 +233,54 @@ def _fetch_window(start_date: str, end_date: str, by: str = "start") -> list[dic
         time.sleep(SLEEP_BETWEEN_CALLS)
 
 
-def fetch_filtered_markets(start_date_min: str, cache_dir: Optional[Path] = None) -> pd.DataFrame:
+def in_scope(raw_markets: list[dict]) -> list[dict]:
+    """Markets whose Gamma startDate is on or after START_DATE_MIN — the scope the
+    full fetch gets from its start_date_min filter. Needed when fetching by end date."""
+    floor = pd.Timestamp(START_DATE_MIN, tz="UTC")
+    out = []
+    for m in raw_markets:
+        start = parse_dt(m.get("startDate"))
+        if start is not None and start >= floor:
+            out.append(m)
+    return out
+
+
+def fetch_incremental(since: pd.Timestamp) -> pd.DataFrame:
+    """
+    Closed markets whose scheduled end date is on or after `since`, with no upper
+    bound (ADR-020), filtered like the full fetch. Walked in monthly windows up
+    to today, then one open-ended window for markets that closed early.
+    """
+    today = pd.Timestamp.now(tz="UTC").strftime("%Y-%m-%d")
+    windows = list(_date_windows(since.strftime("%Y-%m-%d"), today, months=1)) + [(today, None)]
+    log.info("=" * 60)
+    log.info("STEP 1: Incremental fetch by scheduled end date (ADR-020)")
+    log.info("=" * 60)
+    log.info("  end_date >= %s (last fetch − %d days), no upper bound; volume >= %s",
+             since.date(), LOOKBACK_DAYS, f"{VOLUME_NUM_MIN:,}")
+
+    frames = []
+    for i, (wstart, wend) in enumerate(windows, 1):
+        raw = _fetch_window(wstart, wend, by="end")
+        df = parse_and_filter_markets(in_scope(raw), verbose=False)
+        log.info("  [%d/%d] end %s → %s  %7d fetched  %5d passing",
+                 i, len(windows), wstart, wend or "open", len(raw), len(df))
+        frames.append(df)
+    frames = [f for f in frames if not f.empty]
+    if not frames:
+        return pd.DataFrame(columns=META_COLUMNS)
+    return pd.concat(frames, ignore_index=True).drop_duplicates("market_id", keep="first").reset_index(drop=True)
+
+
+def fetch_filtered_markets(start_date_min: str, cache_dir: Optional[Path] = None,
+                           resume: bool = False) -> pd.DataFrame:
     """Fetch monthly windows from start_date_min to today and filter each as it arrives.
 
     Filtering per window keeps memory flat: most raw markets are short-duration
     and discarded immediately. With cache_dir set, each fully elapsed window is
-    written to a CSV and reused on the next run, so an interrupted full fetch resumes.
+    written to a CSV. Those files are reused only with resume=True (continuing an
+    interrupted run): markets that started in a month keep closing afterwards, so
+    a checkpoint from an earlier run is stale (ADR-020).
     """
     today   = pd.Timestamp.now(tz="UTC").strftime("%Y-%m-%d")
     windows = list(_date_windows(start_date_min, today, months=1))
@@ -220,7 +297,7 @@ def fetch_filtered_markets(start_date_min: str, cache_dir: Optional[Path] = None
     frames = []
     for i, (wstart, wend) in enumerate(windows, 1):
         cache_file = cache_dir / f"{wstart}_{wend}.csv" if cache_dir else None
-        if cache_file and cache_file.exists():
+        if resume and cache_file and cache_file.exists():
             df = pd.read_csv(cache_file)
             df["start_date"] = pd.to_datetime(df["start_date"], utc=True, format="ISO8601")
             df["end_date"]   = pd.to_datetime(df["end_date"], utc=True, format="ISO8601")
@@ -357,19 +434,30 @@ def parse_and_filter_markets(raw_markets: list[dict], verbose: bool = True) -> p
 # MAIN
 # ─────────────────────────────────────────────
 
-def main(full: bool = False):
+def main(full: bool = False, resume: bool = False, dry_run: bool = False):
     print("\n" + "█" * 60)
     print("  POLYMARKET — FETCH & FILTER MARKETS")
     print("█" * 60 + "\n")
 
-    existing_df, fetch_from = load_existing_meta()
-    if full:
+    # Recorded before fetching: a market that closes mid-run is picked up next time
+    started = pd.Timestamp.now(tz="UTC").floor("s")
+    existing_df = load_existing_meta()
+
+    if full or existing_df is None:
         # Re-fetch everything (ADR-013). Gamma fields are refreshed on merge;
         # LLM categories and the split are kept (ADR-023).
-        fetch_from = START_DATE_MIN
-        log.info("  --full: re-fetching from %s with checkpoints", fetch_from)
+        mode = "full"
+        log.info("  Full fetch from %s%s", START_DATE_MIN, " (resuming from checkpoints)" if resume else "")
+        new_df = fetch_filtered_markets(START_DATE_MIN, cache_dir=FETCH_CACHE_DIR, resume=resume)
+    else:
+        mode = "incremental"
+        last = last_fetch_time()
+        if last is None:
+            raise SystemExit("ERROR: no record of the last fetch (data/fetch_state.json or data/manifest.json "
+                             "fetched_on). Pull a dataset version or run with --full (ADR-020).")
+        log.info("  Last fetch: %s", last)
+        new_df = fetch_incremental(last - pd.Timedelta(days=LOOKBACK_DAYS))
 
-    new_df = fetch_filtered_markets(fetch_from, cache_dir=FETCH_CACHE_DIR if full else None)
     if new_df.empty and existing_df is None:
         print("No markets passed filters. Exiting.")
         return
@@ -388,20 +476,28 @@ def main(full: bool = False):
         markets_df["split"] = "test"
         log.warning("  First run: all markets marked test — run scripts/recompute_split.py next (ADR-021).")
 
-    # Keep the exact Gamma records behind this meta, so meta_checks.py can
-    # verify every row (ADR-023). Newest file wins in load_fetch_cache().
-    FETCH_CACHE_DIR.mkdir(parents=True, exist_ok=True)
-    new_df.to_csv(FETCH_CACHE_DIR / "latest_fetch.csv", index=False)
-
     from meta_checks import check_meta
     problems = check_meta(markets_df)
     if problems:
         raise SystemExit(f"ERROR: merged meta fails integrity checks, not saved: "
                          f"{ {k: len(v) for k, v in problems.items()} } (ADR-023)")
+
+    if dry_run:
+        print(f"\nDry run — nothing written. Would save {len(markets_df):,} markets "
+              f"({n_added if existing_df is not None else len(markets_df):,} new).")
+        return new_df
+
+    # Keep the exact Gamma records behind this meta, so meta_checks.py can
+    # verify every row (ADR-023). One file per run, never overwritten; the
+    # newest file wins in load_fetch_cache().
+    FETCH_CACHE_DIR.mkdir(parents=True, exist_ok=True)
+    new_df.to_csv(FETCH_CACHE_DIR / f"fetch_{started:%Y%m%d_%H%M%S}_{mode}.csv", index=False)
+
     markets_df.to_csv(OUTPUT_META, index=False)
+    save_fetch_state(started, mode, len(markets_df))
     print(f"\nSaved: {OUTPUT_META}")
     print(f"  Markets: {len(markets_df):,}")
-    print(f"  Columns: {list(markets_df.columns)}")
+    print(f"  Last fetch recorded: {started} ({FETCH_STATE.name})")
     if full and existing_df is not None:
         log.warning("\nFull re-fetch merged under the OLD frozen split. "
                     "Run scripts/recompute_split.py before build_snapshots.py (ADR-013, ADR-021).")
@@ -413,5 +509,12 @@ if __name__ == "__main__":
     logging.basicConfig(level=logging.INFO, format="%(message)s")
     parser = argparse.ArgumentParser(description="Fetch and filter resolved Polymarket markets")
     parser.add_argument("--full", action="store_true",
-                        help="Re-fetch all markets since START_DATE_MIN (ADR-013), resumable via data/fetch_cache/")
-    main(full=parser.parse_args().full)
+                        help="Re-fetch all markets since START_DATE_MIN (ADR-013)")
+    parser.add_argument("--resume", action="store_true",
+                        help="with --full: reuse checkpoints in data/fetch_cache/ from an interrupted run")
+    parser.add_argument("--dry-run", action="store_true",
+                        help="fetch and report, but write nothing")
+    args = parser.parse_args()
+    if args.resume and not args.full:
+        parser.error("--resume only applies to --full")
+    main(full=args.full, resume=args.resume, dry_run=args.dry_run)
