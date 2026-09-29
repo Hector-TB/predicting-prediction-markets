@@ -44,7 +44,7 @@ Both follow the shared training protocol (ADR-024) since 2026-09-29.
 
 ### 4b. One-command refresh with strict model releases (ADR-019)
 Turn the manual steps into one command (`/sync-and-train`):
-fetch (by scheduled end date, ADR-020) → snapshots → pipeline → `meta_checks.py` + `coverage_check.py` +
+fetch (by scheduled end date, ADR-020 — ✓ built 2026-09-29) → snapshots → pipeline → `meta_checks.py` + `coverage_check.py` +
 `check_snapshots.py` → S3 staging backup (`stage_backup.py`) → publish dataset vN → train → candidate release rN with a
 "what changed and why" report vs production → gated, explicit promotion; `rollback` restores
 the previous release.

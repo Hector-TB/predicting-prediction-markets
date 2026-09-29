@@ -109,7 +109,8 @@ python data_collection_pipeline/run_pipeline.py --skip-trends      # reuse the s
 
 Notes:
 - **Market metadata must match Gamma exactly** (ADR-023). Only `category` and `split` are ours; nothing is estimated or back-filled. `meta_checks.py` compares every field with the saved Gamma records, and the pipeline, the snapshot build and `publish` refuse to run if it fails. Repair with `scripts/refresh_meta.py`.
-- `fetch_markets.py --full` re-fetches every market since 2023 with resumable checkpoints (ADR-013). Fresh Gamma values always replace stored ones. Run `scripts/recompute_split.py` afterwards.
+- `fetch_markets.py` (what the runner calls) fetches incrementally: closed markets whose **scheduled end date** is on or after the last fetch − 30 days, with no upper bound, so markets that closed early or late are included (ADR-020). The last fetch time is kept in `data/fetch_state.json`. `--dry-run` previews without writing.
+- `fetch_markets.py --full` re-fetches every market since 2023 (ADR-013); `--full --resume` continues an interrupted run from its checkpoints. Fresh Gamma values always replace stored ones. Run `scripts/recompute_split.py` afterwards.
 - `build_snapshots.py` builds snapshots from 14 days after creation up to the scheduled end, stopping at the market's close (ADR-002, ADR-022). It runs 4 worker processes (a full rebuild takes about 5–6 hours), retries failed requests, and resumes where it stopped.
 - `categorize_markets.py` needs `ANTHROPIC_API_KEY` and only sends markets without a valid category.
 - `fetch_category_trends.py` re-fetches the whole Trends range each run and keeps the saved file if Google rate-limits it (ADR-009).
