@@ -170,52 +170,6 @@ def bootstrap_auc_diff(y_true, y_prob_base, y_prob_new, n_boot: int = 1000, seed
     return {"point": point, "ci_lo": lo, "ci_hi": hi, "p_value": p_val}
 
 
-def evaluate_by_volume_quintile(test_df: pd.DataFrame, y_prob: np.ndarray, threshold: float,
-                                target: str = TARGET):
-    """
-    Per-volume-quintile AUC, PR-AUC, and F1 on the test set.
-
-    Helps identify whether the model's edge concentrates in thin markets
-    (low liquidity / slow price discovery) vs high-volume ones.
-    """
-    df = test_df.copy().reset_index(drop=True)
-    df["_prob"] = y_prob
-
-    # Aggregate to market level (mean prediction, single outcome per market)
-    mkt = (
-        df.groupby("market_id")
-        .agg(
-            total_volume=("total_volume", "first"),
-            outcome=(target, "first"),
-            prob=("_prob", "mean"),
-        )
-        .reset_index()
-    )
-    mkt["quintile"] = pd.qcut(mkt["total_volume"], q=5,
-                               labels=["Q1 (lowest)", "Q2", "Q3", "Q4", "Q5 (highest)"])
-
-    print(f"\n{'─'*72}")
-    print(f"  Per-volume-quintile metrics (market-level, threshold={threshold:.3f})")
-    print(f"  {'Quintile':<14} {'N':>6}  {'Volume range':>22}  {'AUC':>6}  {'PR-AUC':>7}  {'YES%':>6}")
-    print(f"{'─'*72}")
-
-    for q in mkt["quintile"].cat.categories:
-        grp  = mkt[mkt["quintile"] == q]
-        yt   = grp["outcome"].values
-        yp   = grp["prob"].values
-        vmin = grp["total_volume"].min()
-        vmax = grp["total_volume"].max()
-        if len(np.unique(yt)) < 2:
-            print(f"  {str(q):<14} {len(grp):>6}  (skip — single class)")
-            continue
-        auc = roc_auc_score(yt, yp)
-        pr  = average_precision_score(yt, yp)
-        yes = yt.mean()
-        print(f"  {str(q):<14} {len(grp):>6}  ${vmin:>9,.0f}–${vmax:>9,.0f}  {auc:>6.4f}  {pr:>7.4f}  {yes:>6.1%}")
-
-    print(f"{'─'*72}")
-
-
 def analyze_market_disagreements(test_df: pd.DataFrame, y_prob: np.ndarray,
                                  threshold: float, target: str = TARGET, top_n: int = 5):
     """

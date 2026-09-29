@@ -1,7 +1,7 @@
 # ADR-021: Leak-Free Evaluation — Split by Resolution Time, No Test-Set Tuning
 
 **Date:** 2026-09-28  
-**Status:** Accepted  
+**Status:** Accepted; decisions 2–3 superseded by ADR-024 (2026-09-29)  
 **Deciders:** Hector Thompson Baroni  
 **Supersedes:** ADR-001 (split rule only; market-level splitting and the 80/20 ratio stay)  
 **Code location:** `scripts/recompute_split.py`, `data_collection_pipeline/fix_leakage.py` (`split_cutoff`, `mark_pre_cutoff`), `data_collection_pipeline/fetch_markets.py` (new markets → test), `models/*/train.py` (thresholds, LR CV)
@@ -57,3 +57,4 @@ The project's central question is whether engineered features beat the market pr
 - ADR-014: Leakage filter (same script now applies the pre-cutoff rule)
 - ADR-015: Evaluation methodology (shared test rows, market-level bootstrap)
 - ADR-018: Volume look-ahead (option 1 adopted here)
+- ADR-024: Shared training protocol (supersedes decisions 2–3)

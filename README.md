@@ -176,7 +176,7 @@ SVM (AUC ≈ 0.94) was scored on a different subsample (7 lifetime-percentile sn
 - **RQ1:** Tree models beat the market on every metric (best: +0.014 AUC, −0.027 log-loss). Logistic regression doesn't, which suggests the signal comes from non-linear interactions between price, lifecycle position and volatility.
 - **RQ2:** Google Trends adds small, consistent gains for tree models (+0.001–0.002 AUC), mostly in geopolitics and finance.
 - **RQ3:** The models add the most early in a market's life (+0.016–0.019 AUC over the market in the first third, shrinking to +0.003–0.006 in the last third).
-- **Trading simulation:** trading on the gap between model and market price was profitable in backtests, ahead of an always-buy-NO strategy (no fees or slippage modelled). Updated figures will follow the v2 re-score.
+- **Trading simulation:** trading on the gap between model and market price was profitable in backtests, ahead of an always-buy-NO strategy (no fees or slippage modelled). Updated figures will follow the v3 re-score.
 
 ---
 
@@ -310,9 +310,10 @@ All significant decisions are documented in `docs/decisions/`. These are the aud
 | [ADR-018](docs/decisions/018-volume-feature-look-ahead.md) | Volume features: final lifetime volume is look-ahead — dropped from the models |
 | [ADR-019](docs/decisions/019-model-releases-promotion-rollback.md) | Immutable model releases, change reports, gated promotion, rollback |
 | [ADR-020](docs/decisions/020-incremental-fetch-by-end-date.md) | Incremental market fetch by scheduled end date, with a look-back; coverage check |
-| [ADR-021](docs/decisions/021-leak-free-evaluation.md) | Leak-free evaluation: split by resolution time, no tuning on the test set, grouped CV |
+| [ADR-021](docs/decisions/021-leak-free-evaluation.md) | Leak-free evaluation: split by resolution time, no tuning on the test set |
 | [ADR-022](docs/decisions/022-remove-pre-close-cutoff.md) | No 14-day pre-close cutoff (dataset v3); full rebuild with retries |
 | [ADR-023](docs/decisions/023-meta-must-match-gamma.md) | Market metadata must match Gamma; checks block build and publish |
+| [ADR-024](docs/decisions/024-shared-training-protocol.md) | One training protocol for all models: time-ordered holdout, one weight per market, calibration |
 
 ---
 

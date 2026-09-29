@@ -16,12 +16,13 @@ The course paper (research questions, methods, reported results) is `docs/paper/
 
 ---
 
-## Current state (as of 2026-09-28, night)
+## Current state (as of 2026-09-29)
 
 Dataset versions on S3 (ADR-016, manifests in `data/manifests/`): **v1** = the course paper's data; **v2** = full re-fetch + leakage filter + split by resolution time (ADR-013/014/021); **v3 (LATEST)** = v2 without the 14-day pre-close cutoff, metadata matched to Gamma (ADR-022/023). Local `data/` holds v3.
 
 - v3: 45,130 markets; 2,534,852 clean snapshots (train 2,038,895 / 23,120 markets; test 196,977 / 4,924; `test_pre_cutoff` 298,980 unused); cutoff T = 2026-07-01 07:11 UTC. Coverage check: 0 markets missed; full quality check passed
-- Models have **not** been retrained on v2 or v3 yet; the README results are still the paper's (v1)
+- Models have **not** been retrained on v3 yet; the README results are still the paper's (v1). v2 won't be trained (superseded by v3: its metadata had estimated dates)
+- Training scripts now share one protocol (ADR-024, `models/common/training.py`); smoke-tested on a 3% sample, not yet run in full
 - Gates before any publish: `meta_checks.py` (in the pipeline), `scripts/coverage_check.py`, `scripts/check_snapshots.py`
 - Leftovers to delete when convenient (user said no rush): `data/polymarket_ml_dataset.v2.csv` (on S3 staging), `data/*.bak.csv`, `data/*_part[12]*.parquet`, `s3://…/staging/2026-09-27/` and `staging/2026-09-28-v3/`
 - Supabase (free tier): still holds v1. `db/load_parquet.py` now upserts. Re-check tables after any unpause before assuming data loss
@@ -31,8 +32,8 @@ Dataset versions on S3 (ADR-016, manifests in `data/manifests/`): **v1** = the c
 
 ## Next session — start here (in order)
 
-1. **Train on v3**, one model at a time: LR and XGBoost (each ± `--trends`), RF, RF + Trends. Only apply memory fixes if a run is killed (exit 137). Then the same on v2 (`python3 data/sync.py pull --version v2`, `--force` if needed) for the v2-vs-v3 comparison.
-2. **Re-score:** `python3 analysis/rescore_paper.py --out docs/paper/rescore_v3_data.md` (and v2). Key questions: does the paper's gain over the market survive the leak-free setup, and do v3's late rows help (break down by `days_before_close`)? Then update the README results (neutral tone, see memory).
+1. **Train on v3**, one model at a time: LR and XGBoost (each ± `--trends`), RF, RF + Trends. Only apply memory fixes if a run is killed (exit 137).
+2. **Re-score:** `python3 analysis/rescore_paper.py --out docs/paper/rescore_v3_data.md`. Key questions: does the paper's gain over the market survive the leak-free setup, and do the models add anything in the last 14 days (the "time left" table)? Report the YES-rate rise (train 25%, test 38%) next to log-loss. Then update the README results (neutral tone, see memory).
 3. **Refresh Supabase:** `python3 db/load_parquet.py`.
 4. **Merge** `pipeline-leakage-and-categories` → `main` (or open a PR).
 5. **Then build:** the one-command refresh + model releases (ROADMAP 4b, ADR-019) with the three checks as gates; the fixed incremental fetch (ADR-020; don't run a plain incremental `fetch_markets.py` before it); then the site prerequisites (ROADMAP 5) and the API/site. Separate tasks: Trends rework, volume to date (ROADMAP 4c). 692 markets closed after the 25 Sep fetch will come in with the next fetch.
@@ -46,6 +47,8 @@ Dataset versions on S3 (ADR-016, manifests in `data/manifests/`): **v1** = the c
 **Metrics:** primary = AUC-ROC and log-loss. Market price baseline = `price_at_snapshot` scored on the same test set — get current numbers from `python scripts/print_metrics.py`, never a hard-coded value (the old 0.964 / 0.171 did not match the clean data; ADR-014 changes it again). Do not report raw accuracy (78% NO class imbalance makes it misleading).
 
 **Class imbalance:** always `class_weight='balanced'` (sklearn) or `scale_pos_weight` (XGBoost). No exceptions.
+
+**Training protocol (ADR-024):** every model uses `models/common/training.py`: holdout = newest 20% of train markets by resolution time; `market_weights` (each market counts once); settings by holdout AUC; isotonic calibration + threshold from the holdout. Don't add per-model variants.
 
 **Train/test split:** market-level, by resolution time — first 80% resolved = train; test rows dated before the cutoff are `test_pre_cutoff` (unused). Never mix snapshots from the same market across splits; never tune thresholds or anything else on the test set. See ADR-021.
 
@@ -109,6 +112,7 @@ Dataset versions on S3 (ADR-016, manifests in `data/manifests/`): **v1** = the c
 - ADR-018: volume features used final lifetime volume (look-ahead) — dropped (ADR-021)
 - ADR-019: immutable model releases (rN) with change reports, gated promotion, one-command rollback
 - ADR-020: incremental fetch by scheduled end date (≥ last fetch − 30d, no upper bound) — current start-date fetch misses long-running markets; pre-publish coverage check
-- ADR-021: leak-free evaluation — split by resolution time + pre-cutoff test rows dropped, thresholds from held-out train data, grouped CV, `log_volume` dropped
+- ADR-021: leak-free evaluation — split by resolution time + pre-cutoff test rows dropped, thresholds from held-out train data, `log_volume` dropped
 - ADR-022: no 14-day pre-close cutoff from v3 (price rule only); full snapshot rebuild with retries + settings guard
 - ADR-023: meta must match Gamma — no estimated/placeholder values; fresh fetch wins on merge (category/split kept); `meta_checks.py` blocks pipeline/build/publish; repair with `scripts/refresh_meta.py`
+- ADR-024: one training protocol for all models — time-ordered holdout, one weight per market, calibration + threshold from the holdout (supersedes ADR-021 decisions 2–3)

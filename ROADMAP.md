@@ -29,11 +29,12 @@ parquet output in `fix_dataset.py`; dynamic `HARD_CUTOFF` + single-file input in
 `models/random_forest/train.py` and `models/random_forest_trends/train.py` written.
 Both follow the gradient_boosting pattern: combined sample weights, 5-fold CV, isotonic calibration.
 
-### 4. Retrain all models on v2 and v3 and re-score the paper
-- Train LR and XGBoost with and without `--trends`, RF and RF + Trends, on v3 and on v2
-  (`python data/sync.py pull --version v2`), one at a time
+### 4. Retrain all models on v3 and re-score the paper
+- ~~Unify the training protocol~~ ✓ 2026-09-29 (ADR-024): time-ordered holdout, one weight per market,
+  LR now calibrated. v2 dropped from the plan (superseded by v3)
+- Train LR and XGBoost with and without `--trends`, RF and RF + Trends, on v3, one at a time
 - Run `python analysis/rescore_paper.py` for each: does the paper's RQ1 gain survive the
-  leak-free setup (ADR-014, ADR-021)? Do v3's late rows help (compare by `days_before_close`)?
+  leak-free setup (ADR-014, ADR-021)? Do the models add anything in the last 14 days (the "time left" table)?
   (evaluation rules: ADR-015)
 - Run `/evaluate` and compare new vs old metrics
 - Push updated predictions to S3; refresh the DB (`python db/load_parquet.py`)
@@ -48,7 +49,7 @@ fetch (by scheduled end date, ADR-020) → snapshots → pipeline → `meta_chec
 the previous release.
 
 ### 4c. Feature research (separate tasks)
-- ~~Dataset v3 (ADR-022)~~ ✓ published 2026-09-28; model comparison v2 vs v3 is part of step 4.
+- ~~Dataset v3 (ADR-022)~~ ✓ published 2026-09-28. No v2 model comparison: the late-row question is answered within v3.
 - **Rework Google Trends.** The current setup is weak: category-level keywords, one 0–100 scale
   over the whole period (the scale depends on later peaks), weekly granularity. Revisit before relying on it
   (ADR-009 amendment lists the known issues).

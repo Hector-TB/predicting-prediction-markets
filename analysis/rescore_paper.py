@@ -17,6 +17,9 @@ Sections, mirroring the paper:
          computed two ways: by each market's snapshot order (what the paper's
          figure used — analysis.ipynb cell 21) and by pct_lifetime_elapsed
          (what the paper's text describes).
+  Time left — AUC by days before the scheduled close. v3 kept the last 14 days
+         before close (ADR-022); this shows whether the models still add
+         anything there, where the market price is most informed.
   5.5  — Trading simulation, two ways:
            per-snapshot     — the paper's method: every snapshot where
                               |p_model − p_market| > τ is a separate trade.
@@ -25,7 +28,8 @@ Sections, mirroring the paper:
          Both against an always-buy-NO baseline. No fees or slippage.
 
 Prediction files are matched on (market_id, snapshot_timestamp). A model whose
-file lacks the timestamp column (LR/GB before 2026-09-27) is skipped.
+file lacks the timestamp column (LR/GB before 2026-09-27), or was trained on a
+different dataset version than the local data (ADR-016), is skipped.
 """
 
 import argparse
@@ -38,7 +42,7 @@ import pandas as pd
 
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
-from models.common.evaluation import bootstrap_auc_diff, compute_metrics  # noqa: E402
+from models.common.evaluation import bootstrap_auc_diff, compute_metrics, dataset_version  # noqa: E402
 
 log = logging.getLogger(__name__)
 
@@ -66,6 +70,9 @@ TAU = 0.02  # paper's a-priori trade threshold
 
 LIFECYCLE = [("Far (0–33%)", 0, 1 / 3), ("Mid (33–67%)", 1 / 3, 2 / 3), ("Near (67–100%)", 2 / 3, 1.01)]
 DURATION = [("≤ 90d", 0, 90), ("91–180d", 91, 180), ("181–365d", 181, 365), ("> 365d", 366, 10**6)]
+TIME_LEFT = [("< 1 day", 0, 1), ("1–7 days", 1, 7), ("7–14 days", 7, 14), ("14–30 days", 14, 30), ("≥ 30 days", 30, 10**6)]
+# Buckets that are [lo, hi); the others (whole days) are [lo, hi]
+HALF_OPEN = ("pct_lifetime_elapsed", "rank_pct", "days_before_close")
 
 
 # ─────────────────────────────────────────────
@@ -75,13 +82,14 @@ DURATION = [("≤ 90d", 0, 90), ("91–180d", 91, 180), ("181–365d", 181, 365)
 def load_test_frame() -> tuple[pd.DataFrame, list[str]]:
     """Test snapshots joined to every model's predictions. Returns (df, model labels)."""
     base = pd.read_parquet(DATA_PATH, columns=KEY + [
-        "outcome", "split", "price_at_snapshot", "pct_lifetime_elapsed", "duration_days", "category",
+        "outcome", "split", "price_at_snapshot", "pct_lifetime_elapsed", "duration_days", "days_before_close", "category",
     ])
     base = base[base["split"] == "test"].drop(columns="split")
     base["snapshot_timestamp"] = pd.to_datetime(base["snapshot_timestamp"], format="mixed", utc=True)
     base[MARKET] = base["price_at_snapshot"]
     log.info("Test snapshots in %s: %s (%s markets)", DATA_PATH.name, f"{len(base):,}", f"{base['market_id'].nunique():,}")
 
+    version = dataset_version()
     labels = []
     cache: dict[Path, pd.DataFrame] = {}
     for label, sources in MODELS:
@@ -97,6 +105,8 @@ def load_test_frame() -> tuple[pd.DataFrame, list[str]]:
                 why = f"no probability column in {src.name}"
             elif "snapshot_timestamp" not in cache[src].columns:
                 why = f"{src.name} has no snapshot_timestamp column (retrain)"
+            elif set(cache[src].get("dataset_version", pd.Series(["unknown"])).astype(str).unique()) != {version}:
+                why = f"{src.name} was not trained on dataset {version} (retrain)"
             else:
                 path, col = src, found
                 break
@@ -157,11 +167,11 @@ def rq1(df: pd.DataFrame, labels: list[str], n_boot: int) -> str:
 def by_bucket(df: pd.DataFrame, labels: list[str], title: str, col: str, buckets) -> str:
     rows = []
     for name, lo, hi in buckets:
-        sub = df[(df[col] >= lo) & ((df[col] < hi) if col in ("pct_lifetime_elapsed", "rank_pct") else (df[col] <= hi))]
+        sub = df[(df[col] >= lo) & ((df[col] < hi) if col in HALF_OPEN else (df[col] <= hi))]
         y = sub["outcome"].values
-        rows.append([name, f"{len(sub):,}", auc_or_blank(y, sub[MARKET].values)]
+        rows.append([name, f"{len(sub):,}", f"{sub['market_id'].nunique():,}", auc_or_blank(y, sub[MARKET].values)]
                     + [auc_or_blank(y, sub[l].values) for l in labels])
-    return f"## {title}\n\nAUC-ROC per bucket.\n\n" + table(["Bucket", "Snapshots", MARKET] + labels, rows)
+    return f"## {title}\n\nAUC-ROC per bucket.\n\n" + table(["Bucket", "Snapshots", "Markets", MARKET] + labels, rows)
 
 
 def simulate(df: pd.DataFrame, p_model: np.ndarray | None, one_per_market: bool,
@@ -242,6 +252,8 @@ def main():
         by_bucket(df, labels, "RQ3 — lifecycle stage (thirds of each market's snapshots, as in the paper's figure)", "rank_pct", LIFECYCLE),
         by_bucket(df, labels, "RQ3 — lifecycle stage (by pct_lifetime_elapsed)", "pct_lifetime_elapsed", LIFECYCLE),
         by_bucket(df, labels, "RQ3 — market duration", "duration_days", DURATION),
+        by_bucket(df, labels, "Time left before the scheduled close (v3 adds the last 14 days, ADR-022)",
+                  "days_before_close", TIME_LEFT),
         trading(df, labels, args.n_boot),
     ]) + "\n"
 

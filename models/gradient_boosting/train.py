@@ -1,30 +1,42 @@
-import itertools
+"""
+models/gradient_boosting/train.py
+=================================
+XGBoost under the shared training protocol (ADR-024): settings and the number
+of trees chosen on the time-ordered holdout, isotonic calibration and threshold
+from the same holdout, test scored once.
+
+Usage:
+    python models/gradient_boosting/train.py            # base features
+    python models/gradient_boosting/train.py --trends   # + Google Trends
+"""
+
 import argparse
+import itertools
+import logging
 import pathlib
 import sys
 
 import joblib
-import numpy as np
-import pandas as pd
-from sklearn.calibration import calibration_curve
 from sklearn.compose import ColumnTransformer
 from sklearn.impute import SimpleImputer
-from sklearn.isotonic import IsotonicRegression
-from sklearn.metrics import precision_recall_curve, roc_auc_score
 from sklearn.preprocessing import OneHotEncoder
 from xgboost import XGBClassifier
 
 ROOT = pathlib.Path(__file__).resolve().parents[2]
-DATA_DIR = ROOT / "data"
 sys.path.insert(0, str(ROOT))
 
 from models.common.evaluation import (  # noqa: E402
-    dataset_version,
     check_calibration,
+    dataset_version,
     evaluate,
     evaluate_by_category,
     find_optimal_threshold,
 )
+from models.common.training import fit_calibrator, load_dataset, market_weights, split_holdout  # noqa: E402
+
+logging.basicConfig(level=logging.INFO, format="%(message)s")
+log = logging.getLogger(__name__)
+
 ARTIFACTS_DIR = pathlib.Path(__file__).parent / "artifacts"
 PREDICTIONS_DIR = pathlib.Path(__file__).parent / "predictions"
 
@@ -45,16 +57,11 @@ CATEGORICAL_FEATURES = ["category"]
 TREND_FEATURES = ["trend_value", "trend_ma4", "trend_change_4w", "trend_spike", "has_trend_data"]
 TARGET = "outcome"
 
-
-def load_data(trends: bool = False):
-    print("Loading dataset...")
-    # Leakage-filtered (ADR-005/014); the trends file has the same rows plus trend columns
-    name = "polymarket_ml_dataset_with_trends_clean.parquet" if trends else "polymarket_ml_dataset_clean.parquet"
-    df = pd.read_parquet(DATA_DIR / name)
-    df["category"] = df["category"].fillna("other")
-    df = df.dropna(subset=[TARGET])
-    print(f"  Total rows: {len(df):,}  |  train: {(df['split']=='train').sum():,}  |  test: {(df['split']=='test').sum():,}")
-    return df
+GRID = {
+    "learning_rate":    [0.01, 0.05, 0.1],
+    "max_depth":        [4, 6, 8],
+    "min_child_weight": [5, 10, 20],
+}
 
 
 def build_preprocessor():
@@ -64,64 +71,48 @@ def build_preprocessor():
     ])
 
 
+def make_classifier(scale_pos_weight: float, **params) -> XGBClassifier:
+    return XGBClassifier(
+        n_estimators=1000,
+        early_stopping_rounds=50,
+        subsample=0.8,
+        colsample_bytree=0.8,
+        scale_pos_weight=scale_pos_weight,
+        tree_method="hist",
+        eval_metric="auc",
+        random_state=42,
+        n_jobs=-1,
+        **params,
+    )
+
 
 def print_feature_importance(preprocessor, clf, top_n=20):
     cat_encoder = preprocessor.named_transformers_["cat"]
-    cat_feature_names = list(cat_encoder.get_feature_names_out(CATEGORICAL_FEATURES))
-    all_feature_names = NUMERIC_FEATURES + cat_feature_names
+    all_feature_names = NUMERIC_FEATURES + list(cat_encoder.get_feature_names_out(CATEGORICAL_FEATURES))
+    importance = sorted(zip(all_feature_names, clf.feature_importances_), key=lambda x: x[1], reverse=True)
 
-    importances = clf.feature_importances_
-    importance = sorted(zip(all_feature_names, importances), key=lambda x: x[1], reverse=True)
-
-    print(f"\n{'─'*50}")
-    print(f"  Top {top_n} features by gain importance")
-    print(f"{'─'*50}")
+    log.info("\n%s\n  Top %d features by gain importance\n%s", "─" * 50, top_n, "─" * 50)
     for name, score in importance[:top_n]:
-        bar = "█" * max(1, int(score * 200))
-        print(f"  {score:6.4f}  {name:<35}  {bar}")
-    print(f"{'─'*50}")
+        log.info("  %6.4f  %-35s  %s", score, name, "█" * max(1, int(score * 200)))
+    log.info("─" * 50)
 
 
-def run_grid_search(X_fit_t, y_fit, X_cal_t, y_cal, scale_pos_weight):
-    param_grid = {
-        "learning_rate":    [0.01, 0.05, 0.1],
-        "max_depth":        [4, 6, 8],
-        "min_child_weight": [5, 10, 20],
-    }
-    combinations = list(itertools.product(
-        param_grid["learning_rate"],
-        param_grid["max_depth"],
-        param_grid["min_child_weight"],
-    ))
-    print(f"\nGrid search: {len(combinations)} combinations...")
+def run_grid_search(X_fit_t, y_fit, w_fit, X_hold_t, y_hold, scale_pos_weight) -> dict:
+    """Pick settings by AUC on the holdout; early stopping on the same holdout sets the tree count (ADR-024)."""
+    combos = list(itertools.product(GRID["learning_rate"], GRID["max_depth"], GRID["min_child_weight"]))
+    log.info("\nGrid search: %d combinations ...", len(combos))
 
-    best_score  = float("inf")
-    best_params = None
+    best_auc, best_params = -1.0, {}
+    for i, (lr, depth, mcw) in enumerate(combos, 1):
+        clf = make_classifier(scale_pos_weight, learning_rate=lr, max_depth=depth, min_child_weight=mcw)
+        clf.fit(X_fit_t, y_fit, sample_weight=w_fit, eval_set=[(X_hold_t, y_hold)], verbose=False)
+        auc = clf.best_score
+        log.info("  [%2d/%d]  lr=%-5g depth=%d  mcw=%-3d →  AUC=%.4f  (iters=%d)%s",
+                 i, len(combos), lr, depth, mcw, auc, clf.best_iteration, " *" if auc > best_auc else "")
+        if auc > best_auc:
+            best_auc, best_params = auc, {"learning_rate": lr, "max_depth": depth, "min_child_weight": mcw}
 
-    for i, (lr, depth, mcw) in enumerate(combinations, 1):
-        clf = XGBClassifier(
-            n_estimators=1000,
-            early_stopping_rounds=50,
-            learning_rate=lr,
-            max_depth=depth,
-            subsample=0.8,
-            colsample_bytree=0.8,
-            min_child_weight=mcw,
-            scale_pos_weight=scale_pos_weight,
-            tree_method="hist",
-            eval_metric="logloss",
-            random_state=42,
-            n_jobs=-1,
-        )
-        clf.fit(X_fit_t, y_fit, eval_set=[(X_cal_t, y_cal)], verbose=False)
-        score = clf.best_score
-        print(f"  [{i:>2}/{len(combinations)}]  lr={lr}  depth={depth}  mcw={mcw}  →  logloss={score:.4f}  (iters={clf.best_iteration})")
-        if score < best_score:
-            best_score  = score
-            best_params = {"learning_rate": lr, "max_depth": depth, "min_child_weight": mcw}
-
-    print(f"\n  Best params : {best_params}")
-    print(f"  Best logloss: {best_score:.4f}")
+    log.info("  Best: %s  →  AUC=%.4f", best_params, best_auc)
     return best_params
 
 
@@ -134,95 +125,68 @@ def main():
     if args.trends:
         NUMERIC_FEATURES.extend(TREND_FEATURES)
 
-    df = load_data(trends=args.trends)
-    train = df[df["split"] == "train"]
-    test  = df[df["split"] == "test"]
-
-    all_market_ids = train["market_id"].unique()
-    rng = np.random.default_rng(42)
-    cal_market_ids = set(rng.choice(all_market_ids, size=int(len(all_market_ids) * 0.2), replace=False))
-
-    train_fit = train[~train["market_id"].isin(cal_market_ids)]
-    train_cal = train[train["market_id"].isin(cal_market_ids)]
-
-    print(f"  Train fit: {len(train_fit):,} rows  |  Train cal: {len(train_cal):,} rows")
+    df = load_dataset(trends=args.trends)
+    fit, holdout = split_holdout(df[df["split"] == "train"])
+    test = df[df["split"] == "test"].reset_index(drop=True)
+    del df
 
     FEATURES = NUMERIC_FEATURES + CATEGORICAL_FEATURES
-    X_fit,  y_fit  = train_fit[FEATURES], train_fit[TARGET].values
-    X_cal,  y_cal  = train_cal[FEATURES], train_cal[TARGET].values
-    X_test, y_test = test[FEATURES],      test[TARGET].values
+    y_fit, y_hold, y_test = fit[TARGET].values, holdout[TARGET].values, test[TARGET].values
+    w_fit = market_weights(fit["market_id"])
 
-    print("\nFitting preprocessor...")
+    log.info("\nFitting preprocessor ...")
     preprocessor = build_preprocessor()
-    X_fit_t  = preprocessor.fit_transform(X_fit)
-    X_cal_t  = preprocessor.transform(X_cal)
-    X_test_t = preprocessor.transform(X_test)
-    print("  Done.")
+    X_fit_t  = preprocessor.fit_transform(fit[FEATURES])
+    X_hold_t = preprocessor.transform(holdout[FEATURES])
+    X_test_t = preprocessor.transform(test[FEATURES])
 
     scale_pos_weight = float((y_fit == 0).sum() / (y_fit == 1).sum())
-    print(f"  scale_pos_weight: {scale_pos_weight:.2f}")
+    log.info("  scale_pos_weight: %.2f", scale_pos_weight)
 
-    best_params = run_grid_search(X_fit_t, y_fit, X_cal_t, y_cal, scale_pos_weight)
+    best_params = run_grid_search(X_fit_t, y_fit, w_fit, X_hold_t, y_hold, scale_pos_weight)
 
-    print("\nTraining XGBoost with best params...")
-    clf = XGBClassifier(
-        n_estimators=1000,
-        early_stopping_rounds=50,
-        subsample=0.8,
-        colsample_bytree=0.8,
-        scale_pos_weight=scale_pos_weight,
-        tree_method="hist",
-        eval_metric="logloss",
-        random_state=42,
-        n_jobs=-1,
-        **best_params,
-    )
-    clf.fit(
-        X_fit_t, y_fit,
-        eval_set=[(X_cal_t, y_cal)],
-        verbose=100,
-    )
-    print(f"  Best iteration: {clf.best_iteration}  |  Best score: {clf.best_score:.4f}")
+    log.info("\nTraining XGBoost with best params ...")
+    clf = make_classifier(scale_pos_weight, **best_params)
+    clf.fit(X_fit_t, y_fit, sample_weight=w_fit, eval_set=[(X_hold_t, y_hold)], verbose=100)
+    log.info("  Best iteration: %d  |  Holdout AUC: %.4f", clf.best_iteration, clf.best_score)
 
-    print("\nCalibrating with isotonic regression...")
-    p_cal_raw = clf.predict_proba(X_cal_t)[:, 1]
-    iso = IsotonicRegression(out_of_bounds="clip")
-    iso.fit(p_cal_raw, y_cal)
-    print("  Done.")
+    log.info("Calibrating with isotonic regression on the holdout ...")
+    p_hold_raw = clf.predict_proba(X_hold_t)[:, 1]
+    iso = fit_calibrator(p_hold_raw, y_hold)
+
+    # Threshold chosen on the holdout — never on the test set (ADR-021)
+    optimal_threshold, best_f1 = find_optimal_threshold(y_hold, iso.transform(p_hold_raw))
+    log.info("  Threshold (max F1 on holdout): %.3f  (F1=%.4f)", optimal_threshold, best_f1)
 
     y_prob_raw = clf.predict_proba(X_test_t)[:, 1]
     y_prob_cal = iso.transform(y_prob_raw)
 
-    # Threshold chosen on the calibration markets — never on the test set (ADR-021)
-    optimal_threshold, best_f1 = find_optimal_threshold(y_cal, iso.transform(p_cal_raw))
-    print(f"\n  Threshold (max F1 on calibration set): {optimal_threshold:.3f}  (F1={best_f1:.4f})")
-
     evaluate(y_test, y_prob_raw, label="XGBoost — Uncalibrated", threshold=optimal_threshold)
     evaluate(y_test, y_prob_cal, label="XGBoost — Calibrated",   threshold=optimal_threshold)
-    evaluate_by_category(test.reset_index(drop=True), y_prob_cal, threshold=optimal_threshold)
+    evaluate_by_category(test, y_prob_cal, threshold=optimal_threshold)
 
-    print("\n  === Calibration before vs after ===")
-    print("  -- Before --")
+    log.info("\n  === Calibration before vs after ===\n  -- Before --")
     check_calibration(y_test, y_prob_raw)
-    print("  -- After --")
+    log.info("  -- After --")
     check_calibration(y_test, y_prob_cal)
 
     print_feature_importance(preprocessor, clf)
 
     ARTIFACTS_DIR.mkdir(parents=True, exist_ok=True)
     model_path = ARTIFACTS_DIR / f"model{suffix}.joblib"
-    joblib.dump({"preprocessor": preprocessor, "clf": clf, "calibrator": iso}, model_path)
-    print(f"\nModel saved to {model_path}")
+    joblib.dump({"preprocessor": preprocessor, "clf": clf, "calibrator": iso, "threshold": optimal_threshold},
+                model_path)
+    log.info("\nModel saved to %s", model_path)
 
     PREDICTIONS_DIR.mkdir(parents=True, exist_ok=True)
-    pred_df = test[["market_id", "snapshot_timestamp", "category", TARGET]].copy().reset_index(drop=True)
-    pred_df["pred_prob_raw"] = y_prob_raw
-    pred_df["pred_prob"]     = y_prob_cal
+    pred_df = test[["market_id", "snapshot_timestamp", "category", TARGET]].copy()
+    pred_df["pred_prob_raw"]   = y_prob_raw
+    pred_df["pred_prob"]       = y_prob_cal
     pred_df["dataset_version"] = dataset_version()
-    pred_df["pred_label"]    = (y_prob_cal >= optimal_threshold).astype(int)
+    pred_df["pred_label"]      = (y_prob_cal >= optimal_threshold).astype(int)
     preds_path = PREDICTIONS_DIR / f"predictions{suffix}.csv"
     pred_df.to_csv(preds_path, index=False)
-    print(f"Predictions saved to {preds_path}")
+    log.info("Predictions saved to %s", preds_path)
 
 
 if __name__ == "__main__":

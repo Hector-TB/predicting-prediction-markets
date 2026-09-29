@@ -1,28 +1,43 @@
+"""
+models/logistic_regression/train.py
+===================================
+Logistic regression under the shared training protocol (ADR-024): settings
+chosen on the time-ordered holdout, isotonic calibration and threshold from
+the same holdout, test scored once.
+
+Usage:
+    python models/logistic_regression/train.py            # base features
+    python models/logistic_regression/train.py --trends   # + Google Trends
+"""
+
 import argparse
+import logging
 import pathlib
 import sys
 
 import joblib
-import numpy as np
-import pandas as pd
 from sklearn.compose import ColumnTransformer
 from sklearn.impute import SimpleImputer
 from sklearn.linear_model import LogisticRegression
-from sklearn.metrics import precision_recall_curve, roc_auc_score
-from sklearn.model_selection import GridSearchCV, StratifiedGroupKFold, cross_val_predict
+from sklearn.metrics import roc_auc_score
 from sklearn.pipeline import Pipeline
 from sklearn.preprocessing import OneHotEncoder, StandardScaler
 
 ROOT = pathlib.Path(__file__).resolve().parents[2]
-DATA_DIR = ROOT / "data"
 sys.path.insert(0, str(ROOT))
 
 from models.common.evaluation import (  # noqa: E402
+    check_calibration,
     dataset_version,
     evaluate,
     evaluate_by_category,
     find_optimal_threshold,
 )
+from models.common.training import fit_calibrator, load_dataset, market_weights, split_holdout  # noqa: E402
+
+logging.basicConfig(level=logging.INFO, format="%(message)s")
+log = logging.getLogger(__name__)
+
 ARTIFACTS_DIR = pathlib.Path(__file__).parent / "artifacts"
 PREDICTIONS_DIR = pathlib.Path(__file__).parent / "predictions"
 
@@ -43,16 +58,9 @@ CATEGORICAL_FEATURES = ["category"]
 TREND_FEATURES = ["trend_value", "trend_ma4", "trend_change_4w", "trend_spike", "has_trend_data"]
 TARGET = "outcome"
 
-
-def load_data(trends: bool = False):
-    print("Loading dataset...")
-    # Leakage-filtered (ADR-005/014); the trends file has the same rows plus trend columns
-    name = "polymarket_ml_dataset_with_trends_clean.parquet" if trends else "polymarket_ml_dataset_clean.parquet"
-    df = pd.read_parquet(DATA_DIR / name)
-    df["category"] = df["category"].fillna("other")
-    df = df.dropna(subset=[TARGET])
-    print(f"  Total rows: {len(df):,}  |  train: {(df['split']=='train').sum():,}  |  test: {(df['split']=='test').sum():,}")
-    return df
+# (C, penalty, solver)
+GRID = [(c, "l2", "lbfgs") for c in [0.01, 0.1, 1.0, 10.0, 100.0]] + \
+       [(c, "l1", "liblinear") for c in [0.01, 0.1, 1.0, 10.0, 100.0]]
 
 
 def build_pipeline():
@@ -65,64 +73,36 @@ def build_pipeline():
     ])
     return Pipeline([
         ("preprocessor", preprocessor),
-        ("clf", LogisticRegression(
-            class_weight="balanced",
-            max_iter=1000,
-            solver="lbfgs",
-            C=1.0,
-            random_state=42,
-        )),
+        ("clf", LogisticRegression(class_weight="balanced", max_iter=1000, random_state=42)),
     ])
-
 
 
 def print_feature_importance(pipeline, top_n=20):
     clf = pipeline.named_steps["clf"]
-    preprocessor = pipeline.named_steps["preprocessor"]
+    cat_encoder = pipeline.named_steps["preprocessor"].named_transformers_["cat"]
+    all_feature_names = NUMERIC_FEATURES + list(cat_encoder.get_feature_names_out(CATEGORICAL_FEATURES))
+    importance = sorted(zip(all_feature_names, clf.coef_[0]), key=lambda x: abs(x[1]), reverse=True)
 
-    cat_encoder = preprocessor.named_transformers_["cat"]
-    cat_feature_names = list(cat_encoder.get_feature_names_out(CATEGORICAL_FEATURES))
-    all_feature_names = NUMERIC_FEATURES + cat_feature_names
-
-    coefs = clf.coef_[0]
-    importance = sorted(zip(all_feature_names, coefs), key=lambda x: abs(x[1]), reverse=True)
-
-    print(f"\n{'─'*50}")
-    print(f"  Top {top_n} features by |coefficient|")
-    print(f"{'─'*50}")
+    log.info("\n%s\n  Top %d features by |coefficient|\n%s", "─" * 50, top_n, "─" * 50)
     for name, coef in importance[:top_n]:
-        bar = "+" if coef > 0 else "-"
-        print(f"  {bar} {abs(coef):6.3f}  {name}")
-    print(f"{'─'*50}")
+        log.info("  %s %6.3f  %s", "+" if coef > 0 else "-", abs(coef), name)
+    log.info("─" * 50)
 
 
-def run_grid_search(pipeline, X_train, y_train, sample_weights, groups):
-    param_grid = [
-        {
-            "clf__C": [0.01, 0.1, 1.0, 10.0, 100.0],
-            "clf__penalty": ["l2"],
-            "clf__solver": ["lbfgs"],
-        },
-        {
-            "clf__C": [0.01, 0.1, 1.0, 10.0, 100.0],
-            "clf__penalty": ["l1"],
-            "clf__solver": ["liblinear"],
-        },
-    ]
-    grid = GridSearchCV(
-        pipeline,
-        param_grid,
-        scoring="roc_auc",
-        # Folds split by market, so one market's snapshots never sit in both
-        # the fitting and the validation fold (ADR-021)
-        cv=StratifiedGroupKFold(n_splits=5),
-        n_jobs=-1,
-        verbose=1,
-    )
-    grid.fit(X_train, y_train, groups=groups, clf__sample_weight=sample_weights)
-    print(f"\n  Best params : {grid.best_params_}")
-    print(f"  Best CV AUC : {grid.best_score_:.4f}")
-    return grid.best_estimator_
+def run_grid_search(X_fit, y_fit, w_fit, X_hold, y_hold) -> dict:
+    """Pick C × penalty by AUC on the holdout (ADR-024)."""
+    log.info("\nGrid search: %d combinations ...", len(GRID))
+    best_auc, best_params = -1.0, {}
+    for i, (c, penalty, solver) in enumerate(GRID, 1):
+        params = {"clf__C": c, "clf__penalty": penalty, "clf__solver": solver}
+        pipe = build_pipeline().set_params(**params)
+        pipe.fit(X_fit, y_fit, clf__sample_weight=w_fit)
+        auc = roc_auc_score(y_hold, pipe.predict_proba(X_hold)[:, 1])
+        log.info("  [%2d/%d]  C=%-6g  %s  →  AUC=%.4f%s", i, len(GRID), c, penalty, auc, " *" if auc > best_auc else "")
+        if auc > best_auc:
+            best_auc, best_params = auc, params
+    log.info("  Best: %s  →  AUC=%.4f", best_params, best_auc)
+    return best_params
 
 
 def main():
@@ -134,52 +114,59 @@ def main():
     if args.trends:
         NUMERIC_FEATURES.extend(TREND_FEATURES)
 
-    df = load_data(trends=args.trends)
-    train = df[df["split"] == "train"]
-    test  = df[df["split"] == "test"]
+    df = load_dataset(trends=args.trends)
+    fit, holdout = split_holdout(df[df["split"] == "train"])
+    test = df[df["split"] == "test"].reset_index(drop=True)
+    del df
 
     FEATURES = NUMERIC_FEATURES + CATEGORICAL_FEATURES
-    X_train, y_train = train[FEATURES], train[TARGET]
-    X_test,  y_test  = test[FEATURES],  test[TARGET]
+    X_fit,  y_fit  = fit[FEATURES],     fit[TARGET].values
+    X_hold, y_hold = holdout[FEATURES], holdout[TARGET].values
+    X_test, y_test = test[FEATURES],    test[TARGET].values
+    w_fit = market_weights(fit["market_id"])
 
-    counts = train.groupby("market_id").size()
-    sample_weights = train["market_id"].map(counts).rdiv(1).values
+    best_params = run_grid_search(X_fit, y_fit, w_fit, X_hold, y_hold)
 
-    print("\nRunning grid search for logistic regression...")
-    pipeline = build_pipeline()
-    groups = train["market_id"].values
-    pipeline = run_grid_search(pipeline, X_train, y_train, sample_weights, groups)
-    print("  Done.")
+    log.info("\nTraining final model on fit markets ...")
+    pipeline = build_pipeline().set_params(**best_params)
+    pipeline.fit(X_fit, y_fit, clf__sample_weight=w_fit)
 
-    # Threshold from out-of-fold predictions on train — never on the test set (ADR-021)
-    y_oof = cross_val_predict(
-        pipeline, X_train, y_train, groups=groups,
-        cv=StratifiedGroupKFold(n_splits=5), method="predict_proba",
-        params={"clf__sample_weight": sample_weights}, n_jobs=-1,
-    )[:, 1]
-    optimal_threshold, best_f1 = find_optimal_threshold(y_train, y_oof)
-    print(f"\n  Threshold (max F1, out-of-fold on train): {optimal_threshold:.3f}  (F1={best_f1:.4f})")
+    log.info("Calibrating with isotonic regression on the holdout ...")
+    p_hold_raw = pipeline.predict_proba(X_hold)[:, 1]
+    iso = fit_calibrator(p_hold_raw, y_hold)
 
-    y_prob = pipeline.predict_proba(X_test)[:, 1]
+    # Threshold chosen on the holdout — never on the test set (ADR-021)
+    optimal_threshold, best_f1 = find_optimal_threshold(y_hold, iso.transform(p_hold_raw))
+    log.info("  Threshold (max F1 on holdout): %.3f  (F1=%.4f)", optimal_threshold, best_f1)
 
-    evaluate(y_test, y_prob, label="Logistic Regression", threshold=optimal_threshold)
-    evaluate_by_category(test.reset_index(drop=True), y_prob, threshold=optimal_threshold)
+    y_prob_raw = pipeline.predict_proba(X_test)[:, 1]
+    y_prob_cal = iso.transform(y_prob_raw)
+
+    evaluate(y_test, y_prob_raw, label="Logistic Regression — Uncalibrated", threshold=optimal_threshold)
+    evaluate(y_test, y_prob_cal, label="Logistic Regression — Calibrated",   threshold=optimal_threshold)
+    evaluate_by_category(test, y_prob_cal, threshold=optimal_threshold)
+
+    log.info("\n  === Calibration before vs after ===\n  -- Before --")
+    check_calibration(y_test, y_prob_raw)
+    log.info("  -- After --")
+    check_calibration(y_test, y_prob_cal)
 
     print_feature_importance(pipeline)
 
     ARTIFACTS_DIR.mkdir(parents=True, exist_ok=True)
     model_path = ARTIFACTS_DIR / f"model{suffix}.joblib"
-    joblib.dump({"pipeline": pipeline}, model_path)
-    print(f"\nModel saved to {model_path}")
+    joblib.dump({"pipeline": pipeline, "calibrator": iso, "threshold": optimal_threshold}, model_path)
+    log.info("\nModel saved to %s", model_path)
 
     PREDICTIONS_DIR.mkdir(parents=True, exist_ok=True)
-    pred_df = test[["market_id", "snapshot_timestamp", "category", TARGET]].copy().reset_index(drop=True)
-    pred_df["pred_prob"]  = y_prob
+    pred_df = test[["market_id", "snapshot_timestamp", "category", TARGET]].copy()
+    pred_df["pred_prob_raw"]   = y_prob_raw
+    pred_df["pred_prob"]       = y_prob_cal
     pred_df["dataset_version"] = dataset_version()
-    pred_df["pred_label"] = (y_prob >= optimal_threshold).astype(int)
+    pred_df["pred_label"]      = (y_prob_cal >= optimal_threshold).astype(int)
     preds_path = PREDICTIONS_DIR / f"predictions{suffix}.csv"
     pred_df.to_csv(preds_path, index=False)
-    print(f"Predictions saved to {preds_path}")
+    log.info("Predictions saved to %s", preds_path)
 
 
 if __name__ == "__main__":
