@@ -74,6 +74,8 @@ The first full LR run on v3 showed that isotonic calibration outputs exactly 0 o
 
 **Decision:** `fit_calibrator` bounds its output with `IsotonicRegression(y_min=0.001, y_max=0.999)`. A group that went 53-for-53 is very likely, not certain. The penalty for a wrong 0.999 is 6.9, still well above the market's 2.7 at 0.93. The ranking (AUC) and the threshold are unchanged.
 
+**Disclosure:** this change was motivated by looking at test-set results (the 58 rows), so the v3 test set is no longer fully untouched for this choice. The effect is limited to the 1,746 extreme predictions, and the ranking is unchanged. From here on, protocol changes are judged on the holdout or on a walk-forward backtest (ADR-019), not on the test set.
+
 **Alternative considered:** bound to the market's own range (0.05–0.95; the price rule of ADR-014 removes snapshots outside it). Rejected: it would stop the model from being more confident than the market, which is part of what is being tested.
 
 ## Related ADRs

@@ -49,6 +49,12 @@ fetch (by scheduled end date, ADR-020 — ✓ built 2026-09-29) → snapshots �
 "what changed and why" report vs production → gated, explicit promotion; `rollback` restores
 the previous release.
 
+### 4d. Walk-forward backtest (parked; plan in the ADR-019 amendment)
+Train at each quarterly cutoff from 2025 Q1, predict the next quarter, and pool the results. It shows whether the
+edge over the market is stable across periods, when the models fail, how fast they go stale (refresh cadence), and the
+normal quarter-to-quarter swing for reading the live track record. Reuses the refresh's `train.py --params` and
+`predict()`; run it after the refresh core exists.
+
 ### 4c. Feature research (separate tasks)
 - ~~Dataset v3 (ADR-022)~~ ✓ published 2026-09-28. No v2 model comparison: the late-row question is answered within v3.
 - **Rework Google Trends.** The current setup is weak: category-level keywords, one 0–100 scale
