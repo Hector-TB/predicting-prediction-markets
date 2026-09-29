@@ -16,31 +16,26 @@ The course paper (research questions, methods, reported results) is `docs/paper/
 
 ---
 
-## Current state (as of 2026-09-27, night)
+## Current state (as of 2026-09-28, night)
 
-Dataset versions: **v1** = the course-project dataset the paper used (on S3, `datasets/v1/`, frozen); **v2** = the ADR-013/014 rebuild (45,143 markets fetched, not yet published).
+Dataset versions on S3 (ADR-016, manifests in `data/manifests/`): **v1** = the course paper's data; **v2** = full re-fetch + leakage filter + split by resolution time (ADR-013/014/021); **v3 (LATEST)** = v2 without the 14-day pre-close cutoff, metadata matched to Gamma (ADR-022/023). Local `data/` holds v3.
 
-- Snapshot rebuild finished 2026-09-27 ~22:20: `data/polymarket_ml_dataset.csv` has 2,788,184 rows (COMPLETE, no errors). Backed up to `s3://<bucket>/staging/2026-09-27/` (CSV, meta, closed-times cache, fetch cache, build logs — all sizes verified; log `logs/stage_backup.log`). This is a backup, **not** a dataset version
-- All 45,143 markets are LLM-categorised (`data/polymarket_markets_meta.csv`); backups `data/*.pre_categorize*.bak.csv` can be deleted after v2 is published
-- Supabase (free tier; was paused, restored 2026-09-27): still holds v1 — 20,948 markets, 1,458 trends, 9 model_runs, empty snapshots/predictions. Re-check tables after any unpause before assuming data loss
-- S3 bucket versioning enabled 2026-09-27; `sync.py push` removed (ADR-016)
-- Work is on branch `pipeline-leakage-and-categories` (pushed to GitHub, not merged to `main`)
-- Machine: 8 GB RAM, disk often < 5 GB free — restart before heavy steps; run models one at a time
+- v3: 45,130 markets; 2,534,852 clean snapshots (train 2,038,895 / 23,120 markets; test 196,977 / 4,924; `test_pre_cutoff` 298,980 unused); cutoff T = 2026-07-01 07:11 UTC. Coverage check: 0 markets missed; full quality check passed
+- Models have **not** been retrained on v2 or v3 yet; the README results are still the paper's (v1)
+- Gates before any publish: `meta_checks.py` (in the pipeline), `scripts/coverage_check.py`, `scripts/check_snapshots.py`
+- Leftovers to delete when convenient (user said no rush): `data/polymarket_ml_dataset.v2.csv` (on S3 staging), `data/*.bak.csv`, `data/*_part[12]*.parquet`, `s3://…/staging/2026-09-27/` and `staging/2026-09-28-v3/`
+- Supabase (free tier): still holds v1. `db/load_parquet.py` now upserts. Re-check tables after any unpause before assuming data loss
+- S3 bucket versioning on; work is on branch `pipeline-leakage-and-categories` (pushed, not merged to `main`)
+- Machine: 8 GB RAM, 2 physical cores; VS Code runs from a translocated path (move it to Applications). Background jobs started from Claude die if VS Code quits
 - No API, no frontend yet
 
 ## Next session — start here (in order)
 
-State at end of 2026-09-28: v2 published (S3 `datasets/v2/`, LATEST). The v3 rebuild (ADR-022, meta refreshed per ADR-023) ran 12:05–~18:00. `scripts/stage_backup.py` (log `logs/stage_backup_v3.log`) waited for the pipeline and the coverage check, then backed everything up to `s3://<bucket>/staging/2026-09-28-v3/` with size checks. v3 is **not published yet**.
-
-1. **Check last night's jobs:** end of `logs/pipeline_v3_20260928_1205.log` (`PIPELINE COMPLETE`?), `logs/stage_backup_v3.log` (`DONE`, no `SIZE MISMATCH`), and the latest `logs/coverage_run_*.log`.
-2. ~~Coverage check~~ — done 2026-09-28 20:42 (`logs/coverage_run_20260928_1719.log`, list in `logs/coverage_20260928_2042.csv`, both also in staging): 46,038 qualifying markets by end date, **0 MISSED**; 692 new (closed after the 25 Sep fetch — add with the next fetch), 224 out of scope (Gamma startDate < 2023). Still to look at: 8 meta markets the end-date route didn't return.
-3. ~~Full quality check on v3~~ — done 2026-09-28 21:30, **ALL CHECKS PASSED** (`python3 scripts/check_snapshots.py`, log `logs/check_v3_20260928_2117.log`). All 5,435,763 raw rows are clean; 4,728,535 rows are identical to v2; every difference is explained (1,956,315 v2 rows after close are no longer built; 699,648 new last-14-day rows; 98 markets with a corrected end date). Training files: train 2,038,895 rows / 23,120 markets, test 196,977 / 4,924, test_pre_cutoff 298,980 / 3,233; cutoff respected.
-4. **Publish v3:** `python3 data/sync.py publish v3 --parent v2 --notes "…"` (dry run first); commit the manifest. Then delete `data/polymarket_ml_dataset.v2.csv` and `staging/2026-09-28-v3/` (optional).
-5. **Train on v2 and v3**, one at a time: LR and XGBoost (each ± `--trends`), RF, RF + Trends. Only apply memory fixes if a run is killed (exit 137).
-6. **Re-score:** `python3 analysis/rescore_paper.py` on v2 and v3; compare, including by `days_before_close` bucket. Then update the README results (neutral tone, see memory).
-7. **Refresh Supabase:** `python3 db/load_parquet.py` (now upserts).
-8. **Merge** `pipeline-leakage-and-categories` → `main` (or open a PR).
-9. **Then build:** the one-command refresh + model releases (ROADMAP 4b, ADR-019), with `coverage_check.py` and `meta_checks.py` as gates; the fixed incremental fetch (ADR-020; don't run a plain incremental `fetch_markets.py` before it); then the site prerequisites (ROADMAP 5) and the API/site. Separate tasks: Trends rework, volume to date (ROADMAP 4c).
+1. **Train on v3**, one model at a time: LR and XGBoost (each ± `--trends`), RF, RF + Trends. Only apply memory fixes if a run is killed (exit 137). Then the same on v2 (`python3 data/sync.py pull --version v2`, `--force` if needed) for the v2-vs-v3 comparison.
+2. **Re-score:** `python3 analysis/rescore_paper.py --out docs/paper/rescore_v3_data.md` (and v2). Key questions: does the paper's gain over the market survive the leak-free setup, and do v3's late rows help (break down by `days_before_close`)? Then update the README results (neutral tone, see memory).
+3. **Refresh Supabase:** `python3 db/load_parquet.py`.
+4. **Merge** `pipeline-leakage-and-categories` → `main` (or open a PR).
+5. **Then build:** the one-command refresh + model releases (ROADMAP 4b, ADR-019) with the three checks as gates; the fixed incremental fetch (ADR-020; don't run a plain incremental `fetch_markets.py` before it); then the site prerequisites (ROADMAP 5) and the API/site. Separate tasks: Trends rework, volume to date (ROADMAP 4c). 692 markets closed after the 25 Sep fetch will come in with the next fetch.
 
 ## Key conventions
 

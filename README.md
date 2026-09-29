@@ -45,17 +45,20 @@ See `.env.example` for the full list.
 ```
 predicting-prediction-markets/
 ├── data/                              # parquet/CSV data files (gitignored — live on S3)
-│   └── sync.py                        # push/pull data files to/from S3
+│   ├── manifests/                     # one JSON manifest per published dataset version
+│   └── sync.py                        # list / status / pull / publish dataset versions (S3)
 ├── data_collection_pipeline/          # ETL scripts — run_pipeline.py runs them in order
-│   ├── run_pipeline.py                # end-to-end runner (steps 1–8)
+│   ├── run_pipeline.py                # end-to-end runner (metadata check + steps 1–8)
+│   ├── meta_checks.py                 # market metadata must match Gamma (ADR-023); gates build + publish
 │   ├── fetch_markets.py               # Step 1: resolved markets from Gamma API (keyset pagination)
-│   ├── build_snapshots.py             # Step 2: 12-hour snapshot dataset + rolling features
+│   ├── build_snapshots.py             # Step 2: 12-hour snapshot dataset + rolling features (4 worker processes)
 │   ├── fix_dataset.py                 # Step 3: dedupe, clip prices, fill NaN features, merge to parquet
 │   ├── categorize_markets.py          # Step 4: LLM category assignment (Claude API)
 │   ├── fetch_category_trends.py       # Step 5: pull Google Trends data
 │   ├── build_trend_features.py        # Step 6: compute trend features
 │   ├── merge_trends.py                # Step 7: merge trends into snapshot dataset
-│   └── fix_leakage.py                 # Step 8: remove post-close and settled snapshots
+│   ├── fix_leakage.py                 # Step 8: remove post-close and settled snapshots; mark pre-cutoff test rows
+│   └── stream_parquet.py              # batch-at-a-time parquet I/O (the dataset doesn't fit in 8 GB RAM)
 ├── models/
 │   ├── common/                        # shared evaluation utilities (evaluation.py)
 │   ├── logistic_regression/           # train.py + notebook + predictions/
@@ -66,7 +69,12 @@ predicting-prediction-markets/
 │   └── lightgbm/                      # placeholder (not yet implemented)
 ├── scripts/
 │   ├── print_metrics.py               # metrics table for all models vs the market baseline
-│   └── recompute_split.py             # recompute the 80/20 split after a full re-fetch
+│   ├── recompute_split.py             # 80/20 split by resolution time (ADR-021)
+│   ├── refresh_meta.py                # repair market metadata from Gamma (ADR-023)
+│   ├── coverage_check.py              # are any qualifying markets missing? (by end date, ADR-020)
+│   ├── check_snapshots.py             # full quality check of a build before publishing
+│   ├── stage_backup.py                # back up an unpublished build to S3 staging
+│   └── smoke_test.py                  # quick end-to-end sanity check
 ├── analysis/
 │   ├── analysis.ipynb                 # model comparison, lift curves, calibration
 │   ├── trading_simulation.ipynb       # simulated trading strategy from predictions
@@ -75,7 +83,7 @@ predicting-prediction-markets/
 │   ├── load_parquet.py                # migrate metadata + model registry to Supabase
 │   └── migrations/                    # SQL migration files (apply via Supabase MCP)
 ├── docs/
-│   ├── decisions/                     # Architecture Decision Records (ADR-001–020)
+│   ├── decisions/                     # Architecture Decision Records (ADR-001–023)
 │   ├── design/                        # design docs (search-and-predict site)
 │   └── paper/                         # course paper (LaTeX) + notes on its results
 ├── plots/                             # generated PNGs (gitignored)
@@ -94,20 +102,37 @@ All scripts resolve paths relative to `__file__`. The runner executes every step
 python data_collection_pipeline/run_pipeline.py                   # full incremental refresh
 python data_collection_pipeline/run_pipeline.py --skip-snapshots   # skip steps 1–2
 python data_collection_pipeline/run_pipeline.py --trends-only      # steps 5–8 only
+python data_collection_pipeline/run_pipeline.py --skip-markets --rebuild-snapshots   # rebuild every market's snapshots
+python data_collection_pipeline/run_pipeline.py --skip-trends      # reuse the saved Google Trends data
 ```
 
 Notes:
-- `fetch_markets.py --full` re-fetches every market since 2023 with resumable checkpoints; run `scripts/recompute_split.py` afterwards (ADR-013).
-- `build_snapshots.py` resumes from where it stopped; a full rebuild takes many hours.
-- `categorize_markets.py` needs `ANTHROPIC_API_KEY` and only sends markets that aren't categorized yet.
-- `fix_leakage.py` drops snapshots after each market's API `closedTime` and any snapshot priced ≥ 0.95 or ≤ 0.05 (ADR-005, ADR-014).
+- **Market metadata must match Gamma exactly** (ADR-023). Only `category` and `split` are ours; nothing is estimated or back-filled. `meta_checks.py` compares every field with the saved Gamma records, and the pipeline, the snapshot build and `publish` refuse to run if it fails. Repair with `scripts/refresh_meta.py`.
+- `fetch_markets.py --full` re-fetches every market since 2023 with resumable checkpoints (ADR-013). Fresh Gamma values always replace stored ones. Run `scripts/recompute_split.py` afterwards.
+- `build_snapshots.py` builds snapshots from 14 days after creation up to the scheduled end, stopping at the market's close (ADR-002, ADR-022). It runs 4 worker processes (a full rebuild takes about 5–6 hours), retries failed requests, and resumes where it stopped.
+- `categorize_markets.py` needs `ANTHROPIC_API_KEY` and only sends markets without a valid category.
+- `fetch_category_trends.py` re-fetches the whole Trends range each run and keeps the saved file if Google rate-limits it (ADR-009).
+- `fix_leakage.py` drops snapshots after each market's API `closedTime` and any snapshot priced ≥ 0.95 or ≤ 0.05 (ADR-014). It marks test rows dated before the train/test cutoff as `test_pre_cutoff` (ADR-021).
 
-Datasets are versioned on S3 (ADR-016). Each version is immutable and has a manifest recording its date coverage, the code that built it, row counts and file checksums:
+Before publishing a new version, run both checks:
 ```bash
-python data/sync.py list                      # versions on S3 (v1 = the course paper's data)
+python scripts/coverage_check.py      # qualifying markets missing from the fetch? (exits non-zero if any)
+python scripts/check_snapshots.py     # full quality check of the build, compared with the latest version
+```
+
+Datasets are versioned on S3 (ADR-016). Each version is immutable and has a manifest (`data/manifests/`) recording its coverage, the code that built it, row counts and file checksums:
+
+| Version | What it is |
+|---|---|
+| `v1` | The course project's dataset, used by the paper |
+| `v2` | Full re-fetch (ADR-013), working leakage filter (ADR-014), split by resolution time (ADR-021) |
+| `v3` (latest) | v2 without the 14-day pre-close cutoff (ADR-022), metadata matched to Gamma (ADR-023) |
+
+```bash
+python data/sync.py list                      # versions on S3
 python data/sync.py status                    # which version is checked out locally
 python data/sync.py pull --version v1         # download a version (default: LATEST)
-python data/sync.py publish v2 --parent v1 --notes "…"   # after a pipeline run: new version
+python data/sync.py publish v4 --parent v3 --notes "…"   # after a pipeline run + checks: new version
 ```
 
 ---
@@ -131,7 +156,7 @@ All models train on the leakage-filtered `_clean` parquet files. Shared evaluati
 
 ## Results (course paper, test set of 288,490 snapshots across 4,174 markets)
 
-> These are the results reported in the course paper, on the v1 dataset. The models are being retrained on the expanded v2 dataset, and this section will be updated with the new results.
+> These are the results reported in the course paper, on the v1 dataset. The models are being retrained on the current dataset (v3), and this section will be updated with the new results.
 
 The baseline is the market price itself (`price_at_snapshot` as a probability), scored on the same test set.
 
@@ -157,20 +182,20 @@ SVM (AUC ≈ 0.94) was scored on a different subsample (7 lifetime-percentile sn
 
 ## Dataset
 
-> The figures in this section describe the v1 dataset (20,948 markets). The ADR-013 full re-fetch expanded the market list to 45,143 markets, and the snapshot dataset is being rebuilt from it; the counts below will be updated once the rebuild finishes.
+> The figures in this section describe the current dataset, **v3**. The results above are the paper's, on v1 (20,948 markets, 1,448,142 snapshots).
 
 ### Canonical files (on S3 — fetch with `python data/sync.py pull`; see ADR-016 for versions)
 
 | File | Rows | Description |
 |---|---|---|
-| `polymarket_ml_dataset_clean.parquet` | 1,448,142 | Base features — use for training |
-| `polymarket_ml_dataset_with_trends_clean.parquet` | 1,448,142 | Base + Google Trends features |
-| `category_trends_features.parquet` | ~1,500 | Weekly trend aggregates by category |
-| `polymarket_markets_meta.csv` | 24,092 | Market metadata (regenerate with `fetch_markets.py`) |
+| `polymarket_ml_dataset_clean.parquet` | 2,534,852 | Base features — use for training |
+| `polymarket_ml_dataset_with_trends_clean.parquet` | 2,534,852 | Base + Google Trends features |
+| `category_trends_features.parquet` | 1,755 | Weekly trend aggregates by category |
+| `polymarket_markets_meta.csv` | 45,130 | Market metadata (regenerate with `fetch_markets.py`) |
 
 ### Markets (`polymarket_markets_meta.csv`)
 
-24,092 resolved binary Polymarket markets. Filters: volume ≥ $1,000, duration ≥ 30 days.
+Dataset v3: 45,130 resolved binary Polymarket markets whose Polymarket start date is 2023 or later. Filters: volume ≥ $1,000, duration ≥ 30 days, clear resolution (ADR-004, ADR-008). Every field except `category` and `split` is Gamma's own value (ADR-023).
 
 | Column | Description |
 |---|---|
@@ -184,31 +209,31 @@ SVM (AUC ≈ 0.94) was scored on a different subsample (7 lifetime-percentile sn
 | `total_volume` | Lifetime trading volume (USD) |
 | `yes_final_price` | Final settlement price of YES token |
 | `outcome` | Ground truth: 1 = YES, 0 = NO |
-| `split` | `"train"` or `"test"` (market-level temporal 80/20) |
+| `split` | `"train"` or `"test"` (market-level 80/20 by resolution time, ADR-021) |
 
 ### Snapshots (`polymarket_ml_dataset_clean.parquet`)
 
-One row per (market × 12-hour snapshot). 1,448,142 rows, 27 columns.
+One row per (market × 12-hour snapshot), from 14 days after creation to the market's close, minus near-certain rows (price ≥ 0.95 or ≤ 0.05). Dataset v3: 2,534,852 rows across 29,531 markets, 27 columns.
 
 Feature groups:
 - **Time:** `days_before_close`, `pct_lifetime_elapsed`, `duration_days`
 - **Price:** `price_at_snapshot`, `price_deviation_from_half`
 - **Rolling 7d:** `price_mean_7d`, `price_volatility_7d`, `price_min_7d`, `price_max_7d`, `price_change_7d`, `price_range_7d`, `price_trend_7d`
 - **Rolling 14d:** same set with `_14d` suffix
-- **Volume:** `total_volume`, `log_volume`
+- **Volume:** `total_volume`, `log_volume` — in the data but not used by any model: they hold the market's *final* lifetime volume, which isn't known at snapshot time (ADR-018)
 - **Target:** `outcome`
 
 ### Train / Test Split
 
-Market-level temporal split — oldest 80% of markets form the train set. No snapshot from a test market appears in training. See ADR-001.
+Markets are split by **when they resolved** (ADR-021). The first 80% to resolve are train; the rest are test. The cutoff T is the last train resolution (v3: 2026-07-01 07:11 UTC). Every training label was known by T, and only test snapshots dated T or later are scored. Earlier test rows are marked `test_pre_cutoff` and unused. No market appears in both splits.
 
-| Split | Markets | Snapshots | YES rate |
+| Split (v3) | Markets | Snapshots | YES rate (rows) |
 |---|---|---|---|
-| Train | 16,774 | 1,159,652 | 22.4% |
-| Test | 4,174 | 288,490 | 21.0% |
-| **Total** | **20,948** | **1,448,142** | **22.1%** |
+| Train | 23,120 | 2,038,895 | 25.4% |
+| Test | 4,924 | 196,977 | 38.4% |
+| `test_pre_cutoff` (unused) | 3,233 | 298,980 | 30.5% |
 
-3,144 markets (13%) are absent from the snapshot dataset: insufficient price observations or snapshot window collapses to zero (market resolved early).
+The test set only contains markets that have resolved, so it leans towards shorter markets (a selection effect, not a leak). Of the 45,130 markets, 29,531 have usable snapshots: the rest have no price history, too little history, or only near-certain prices.
 
 ### Class Imbalance
 
@@ -226,21 +251,21 @@ Market-level temporal split — oldest 80% of markets form the train set. No sna
 | `trend_spike` | 1 if `trend_value > 1.5 × trend_ma4` |
 | `has_trend_data` | 1 if trend data exists for this category |
 
-Coverage: 99.6% of snapshots. See ADR-009.
+Each snapshot uses the most recent *completed* week (ADR-009 amendment). Coverage: 99.3% of v3 snapshots. See ADR-009.
 
 ### Categories (LLM-assigned via Claude API)
 
 | Category | Markets | % |
 |---|---|---|
-| `sports` | 7,081 | 29.4% |
-| `politics_us` | 3,751 | 15.6% |
-| `entertainment` | 3,553 | 14.7% |
-| `finance` | 2,846 | 11.8% |
-| `crypto` | 2,367 | 9.8% |
-| `politics_global` | 1,900 | 7.9% |
-| `geopolitics` | 1,292 | 5.4% |
-| `science_tech` | 1,149 | 4.8% |
-| `other` | 152 | 0.6% |
+| `sports` | 14,728 | 32.6% |
+| `politics_us` | 5,997 | 13.3% |
+| `finance` | 5,989 | 13.3% |
+| `entertainment` | 5,162 | 11.4% |
+| `crypto` | 3,664 | 8.1% |
+| `politics_global` | 3,636 | 8.1% |
+| `science_tech` | 2,898 | 6.4% |
+| `geopolitics` | 2,531 | 5.6% |
+| `other` | 525 | 1.2% |
 
 ---
 
@@ -249,7 +274,7 @@ Coverage: 99.6% of snapshots. See ADR-009.
 Supabase Postgres (operational layer — not used for training). Schema: `markets`, `snapshots`, `trends`, `model_runs`, `predictions`. Parquet files are the training data store; the DB serves live market scoring and the future frontend.
 
 ```bash
-# Populate the DB (runs in seconds — metadata + model registry only)
+# Populate the DB (runs in seconds — metadata + model registry only; re-running updates existing rows)
 python db/load_parquet.py
 ```
 
@@ -265,8 +290,8 @@ All significant decisions are documented in `docs/decisions/`. These are the aud
 
 | ADR | Decision |
 |---|---|
-| [ADR-001](docs/decisions/001-temporal-train-test-split.md) | Temporal, market-level 80/20 train/test split |
-| [ADR-002](docs/decisions/002-snapshot-window-design.md) | Snapshot window: `createdAt + 14d` to `endDate − 14d` |
+| [ADR-001](docs/decisions/001-temporal-train-test-split.md) | Temporal, market-level 80/20 train/test split (split rule superseded by ADR-021) |
+| [ADR-002](docs/decisions/002-snapshot-window-design.md) | Snapshot window: `createdAt + 14d` to `endDate − 14d` (end cutoff removed from v3, ADR-022) |
 | [ADR-003](docs/decisions/003-rolling-window-selection.md) | Rolling windows: 7d and 14d |
 | [ADR-004](docs/decisions/004-outcome-threshold.md) | Outcome threshold: `yes_final_price ≥ 0.95` → YES |
 | [ADR-005](docs/decisions/005-leakage-fix.md) | Remove post-resolution snapshots (revised by ADR-014) |
@@ -282,9 +307,12 @@ All significant decisions are documented in `docs/decisions/`. These are the aud
 | [ADR-015](docs/decisions/015-evaluation-methodology.md) | Evaluation: shared test rows, market-level bootstrap CIs, NO trades cost 1 − p |
 | [ADR-016](docs/decisions/016-dataset-versioning.md) | Immutable, manifest-described dataset versions on S3 (`v1`, `v2`, …) |
 | [ADR-017](docs/decisions/017-on-demand-prediction-live-track-record.md) | On-demand prediction via search, with a stored live track record |
-| [ADR-018](docs/decisions/018-volume-feature-look-ahead.md) | Volume features: final lifetime volume is look-ahead (proposed fix) |
+| [ADR-018](docs/decisions/018-volume-feature-look-ahead.md) | Volume features: final lifetime volume is look-ahead — dropped from the models |
 | [ADR-019](docs/decisions/019-model-releases-promotion-rollback.md) | Immutable model releases, change reports, gated promotion, rollback |
-| [ADR-020](docs/decisions/020-incremental-fetch-by-end-date.md) | Incremental market fetch by scheduled end date, with a look-back |
+| [ADR-020](docs/decisions/020-incremental-fetch-by-end-date.md) | Incremental market fetch by scheduled end date, with a look-back; coverage check |
+| [ADR-021](docs/decisions/021-leak-free-evaluation.md) | Leak-free evaluation: split by resolution time, no tuning on the test set, grouped CV |
+| [ADR-022](docs/decisions/022-remove-pre-close-cutoff.md) | No 14-day pre-close cutoff (dataset v3); full rebuild with retries |
+| [ADR-023](docs/decisions/023-meta-must-match-gamma.md) | Market metadata must match Gamma; checks block build and publish |
 
 ---
 

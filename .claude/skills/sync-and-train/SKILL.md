@@ -22,10 +22,16 @@ If any files show "size mismatch", investigate before proceeding.
 
 ```bash
 python3 data_collection_pipeline/run_pipeline.py
+python3 scripts/coverage_check.py                 # no qualifying markets missed (ADR-020)
+python3 scripts/check_snapshots.py                # full quality check vs the latest version
+python3 scripts/stage_backup.py --name <date>-<next version>   # optional insurance before publishing
+python3 data/sync.py publish <next version> --parent <current> --notes "…" --dry-run
 python3 data/sync.py publish <next version> --parent <current> --notes "…"
 ```
 
-Versions are immutable (ADR-016); `python3 data/sync.py list` shows what exists. This fetches new resolved markets, extends Google Trends to today, and regenerates clean parquets.
+Versions are immutable (ADR-016); `python3 data/sync.py list` shows what exists. The pipeline fetches new resolved markets, refreshes Google Trends, and regenerates the clean parquets. It stops if the market metadata doesn't match Gamma (ADR-023). Don't publish unless both checks pass.
+
+> Until ADR-020's incremental fetch is built, a plain incremental `fetch_markets.py` can miss long-running markets. Run `coverage_check.py` after any fetch.
 
 ## 3. Smoke test — verify data is healthy
 
@@ -53,7 +59,7 @@ Run `/evaluate` to see the updated metrics table, then re-score the paper's comp
 (same test rows, market-level CIs, corrected trading ROI — ADR-015):
 
 ```bash
-python3 analysis/rescore_paper.py --out docs/paper/rescore_v2_data.md
+python3 analysis/rescore_paper.py --out docs/paper/rescore_<version>_data.md
 ```
 
 ## 6. Record results

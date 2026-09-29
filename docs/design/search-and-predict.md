@@ -1,6 +1,6 @@
 # Design: Search-and-Predict + Live Track Record
 
-**Status:** Draft, 2026-09-27 · **Decision record:** ADR-017 · **Blocked on:** ADR-018 (volume feature), v2 retrain
+**Status:** Draft, 2026-09-27 · **Decision record:** ADR-017 · **Blocked on:** retrain on v3 (ADR-018 settled: volume features dropped, ADR-021)
 
 ## Goal
 
@@ -80,7 +80,7 @@ GET /predict?market_id=<condition id>
       "market":   { "market_id", "question", "category", "url", "start_date", "end_date",
                     "price", "volume_to_date" },
       "as_of":    "<ISO timestamp>",
-      "dataset_version": "v2",
+      "dataset_version": "v3",
       "headline_model": "rf_trends",
       "predictions": [ { "model": "rf_trends", "probability": 0.34, "gap": +0.09,
                          "warnings": [] }, … six entries … ],
@@ -145,7 +145,7 @@ A scheduled job (daily; GitHub Actions cron is enough) that:
 ## Before building
 
 1. **ADR-018:** fix the volume feature, which currently uses each market's final lifetime volume. It's unavailable for live markets and leaks the future. Retrain after.
-2. Retrain on v2 and pick the headline model from `rescore_paper.py`.
+2. Retrain on v3 (and v2 for comparison) and pick the headline model from `rescore_paper.py`.
 3. Refactor the shared feature function (step 3 above) and test that it reproduces training snapshots exactly.
 
 ## Open questions

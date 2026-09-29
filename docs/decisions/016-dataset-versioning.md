@@ -59,6 +59,16 @@ Checking S3 before freezing it (2026-09-27) showed why a version needs more than
 - Training on unpublished data works but stamps `dataset_version = "unversioned"` and prints a warning.
 - `/sync-and-train` and the README were updated; ADR-012's storage choice (S3 + local parquet) stands, only its layout is replaced.
 
+## Versions published
+
+| Version | Date | Summary |
+|---|---|---|
+| v1 | (course project) | The paper's dataset: 20,948 markets |
+| v2 | 2026-09-28 | Full re-fetch (ADR-013), leakage filter (ADR-014), split by resolution time (ADR-021) |
+| v3 | 2026-09-28 | No 14-day pre-close cutoff (ADR-022), metadata matched to Gamma (ADR-023): 45,130 markets, 2,534,852 clean snapshots |
+
+The manifests in `data/manifests/` are the full record. Unpublished builds can be backed up to `staging/<name>/` with `scripts/stage_backup.py`; those are insurance copies, not versions.
+
 ## Related ADRs
 
 - ADR-012: S3 + DuckDB data lake (layout superseded here)
