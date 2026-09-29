@@ -21,7 +21,8 @@ The course paper (research questions, methods, reported results) is `docs/paper/
 Dataset versions on S3 (ADR-016, manifests in `data/manifests/`): **v1** = the course paper's data; **v2** = full re-fetch + leakage filter + split by resolution time (ADR-013/014/021); **v3 (LATEST)** = v2 without the 14-day pre-close cutoff, metadata matched to Gamma (ADR-022/023). Local `data/` holds v3.
 
 - v3: 45,130 markets; 2,534,852 clean snapshots (train 2,038,895 / 23,120 markets; test 196,977 / 4,924; `test_pre_cutoff` 298,980 unused); cutoff T = 2026-07-01 07:11 UTC. Coverage check: 0 markets missed; full quality check passed
-- LR, XGBoost and RF trained on v3 under one protocol (ADR-024, `models/common/training.py`); re-score in `docs/paper/rescore_v3_data.md`. README results are still the paper's (v1). v2 won't be trained (superseded by v3)
+- LR, XGBoost and RF trained on v3 under one protocol (ADR-024, `models/common/training.py`); re-score in `docs/paper/rescore_v3_data.md`. v2 won't be trained (superseded by v3)
+- Model releases (ADR-019): **r1 = the v3 models, PRODUCTION** (`s3://…/models/r1/`, record in `models/releases/`). `python scripts/release.py status`. The local `models/*/artifacts/` are working copies; releases are the source of truth
 - Gates before any publish: `meta_checks.py` (in the pipeline), `scripts/coverage_check.py`, `scripts/check_snapshots.py`
 - Leftovers to delete when convenient (user said no rush): `data/polymarket_ml_dataset.v2.csv` (on S3 staging), `data/*.bak.csv`, `data/*_part[12]*.parquet`, `s3://…/staging/2026-09-27/` and `staging/2026-09-28-v3/`
 - Supabase (free tier): refreshed with v3 on 2026-09-29 (45,130 v3 markets with Gamma dates, 1,755 trends rows, model runs for v1 + v3). The 13 v1-only markets (dropped by ADR-023) were deleted, so `markets` matches v3 exactly. `db/load_parquet.py` only upserts: delete markets dropped from a new version by hand. Re-check tables after any unpause before assuming data loss

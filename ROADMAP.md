@@ -45,8 +45,8 @@ Schema in `db/migrations/001_initial_schema.sql` (5 tables). Holds v3 since 2026
 `scripts/release.py promote | reject | rollback` needs explicit confirmation.
 
 Build order:
-- [ ] `release.py init`: package the current v3 models as `r1` (production)
-- [ ] `train.py --params` and `predict(artifact, df)` for LR, XGBoost, RF
+- [x] `release.py init`: package the current v3 models as `r1` (production) ✓ 2026-09-29. `s3://…/models/r1/`, record in `models/releases/`; each model's saved file reproduced its published v3 predictions
+- [ ] `train.py --params` for LR, XGBoost, RF (`predict(artifact, df)` ✓; artifacts now save features, settings and RF's category encoder)
 - [ ] `check_snapshots.py` parent-comparison mode; `coverage_check.py` recent-window mode
 - [ ] `refresh.py` stages 0–5 (data), resumable
 - [ ] stages 6–8 (train, release, report) + promotion checks; migration 005 (`model_runs.release`)

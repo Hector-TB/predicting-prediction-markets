@@ -52,6 +52,7 @@ log = logging.getLogger(__name__)
 
 PREFIX = "models"
 POINTER = f"{PREFIX}/PRODUCTION"
+SHORT = {"logistic_regression": "LR", "gradient_boosting": "XGBoost", "random_forest": "RF"}
 N_BOOT = 500
 KEY = ["market_id", "snapshot_timestamp"]
 
@@ -299,7 +300,7 @@ def cmd_status(s3, args) -> None:
             log.info("%-5s (incomplete: no manifest)", n)
             continue
         m = read_json(s3, key)
-        aucs = ", ".join(f"{k.split('_')[0]} {v['metrics']['per_snapshot']['vs_market']['auc']['point']:+.4f}"
+        aucs = ", ".join(f"{SHORT.get(k, k)} {v['metrics']['per_snapshot']['vs_market']['auc']['point']:+.4f}"
                          for k, v in m["models"].items())
         log.info("%-5s %-10s %-8s %-20s %s%s", n, m["status"], m["dataset_version"], m["created_at"][:19],
                  aucs, "   ← PRODUCTION" if n == prod else "")
