@@ -217,11 +217,13 @@ def behaviour_section(test: pd.DataFrame, preds: dict, prod: dict, cand: dict) -
         rows.append([SHORT[name], f"{d.mean():.4f}", f"{np.percentile(d, 95):.4f}", f"{(d > MOVE).mean():.1%}",
                      f"{flips:.1%}"])
         fp, fc = prod["models"][name].get("feature_importance", {}), cand["models"][name].get("feature_importance", {})
-        change = sorted(((abs(fc.get(k, 0) - fp.get(k, 0)), k) for k in set(fp) | set(fc)), reverse=True)[:5]
-        shifts.append([SHORT[name], "; ".join(f"{k} {fp.get(k, 0):.3f} → {fc.get(k, 0):.3f}" for _, k in change)])
+        change = [(d, k) for d, k in sorted(((abs(fc.get(k, 0) - fp.get(k, 0)), k) for k in set(fp) | set(fc)),
+                                            reverse=True)[:5] if d >= 0.0005]
+        shifts.append([SHORT[name], "; ".join(f"{k} {fp.get(k, 0):.3f} → {fc.get(k, 0):.3f}" for _, k in change)
+                       or "no change"])
     return (f"## 5. Behaviour\n\nHow far {rc}'s probabilities move from {rp}'s on the same rows, and how often the "
             "YES/NO label flips (each at its own threshold).\n\n"
-            + table(["Model", "Mean |Δp|", "95th pct |Δp|", f"|Δp| > {MOVE}", "Label flips"], rows)
+            + table(["Model", "Mean \\|Δp\\|", "95th pct \\|Δp\\|", f"\\|Δp\\| > {MOVE}", "Label flips"], rows)
             + "\n\nLargest feature-importance shifts (LR: coefficients; XGBoost: gain; RF: impurity):\n\n"
             + table(["Model", "Feature: production → candidate"], shifts))
 

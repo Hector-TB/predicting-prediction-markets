@@ -173,6 +173,17 @@ Passing only makes the release promotable: `promote` still asks.
 3. **Promotion checks** as above: significance-based for AUC and log-loss; calibration error at most +0.01; the market comparison warns only.
 4. **Full coverage recount** automatically when the last one is more than 30 days old.
 
+### Implementation choices (2026-09-30, stages 6–8)
+
+Details the plan above left open, settled while writing `release.py candidate | report | promote | reject | rollback`:
+1. **Checks run per model and the release is all-or-nothing:** it holds three models, and one failing model rejects the whole release. Checks use every test snapshot (the per-market numbers are in the report, not the checks).
+2. **Expected calibration error** = over 10 equal-width probability bins, |mean prediction − YES rate| weighted by each bin's share of rows (`expected_calibration_error` in `models/common/evaluation.py`).
+3. **Statuses:** `candidate` → `promoted` or `rejected`; a rollback marks the release it replaces `retired`, so a later default rollback never returns to it. Only the manifest's status fields change; artifacts never do.
+4. **`promote` requires a report against the current production.** If production changed since the report was made, the report is run again. Confirmation = typing the release name.
+5. **Default rollback target** = the most recently promoted release other than the current one.
+6. **`model_runs`:** `promote` writes one row per model, tagged with `release` and holding the release manifest's metrics and settings. The unique key becomes (model, dataset, release) with `NULLS NOT DISTINCT`, so `db/load_parquet.py`'s untagged rows stay one per model and dataset. r1's rows are written by `release.py sync-db r1` once migration 005 is applied.
+7. **Stage 6 trains one model at a time** into `logs/refresh_<run id>/models/<model>/` (8 GB RAM); a resumed run skips models already trained.
+
 ### Not decided here
 
 A walk-forward backtest (testing the modelling approach across many past periods) was proposed in the same review. It is parked: see *Parked* in `ROADMAP.md`. It gets its own ADR when it is built.

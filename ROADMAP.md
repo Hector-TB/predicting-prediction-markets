@@ -49,7 +49,7 @@ Build order:
 - [x] `train.py --params` / `--out-dir` and `predict(artifact, df)` for LR, XGBoost, RF ✓ 2026-09-29. Retraining v3 with r1's settings reproduces r1 exactly (LR/XGBoost identical, RF within CSV rounding); LR and XGBoost take ~1 min each, RF ~15 min
 - [x] `check_snapshots.py --parent vN` (market-by-market vs the parent: identical rows apart from `split`; v3 vs itself: 39,588 markets identical) and `coverage_check.py --end-from` (recent window, ~40 min; 0 missed, 753 new since the v3 fetch) ✓ 2026-09-29. A passing full recount is recorded as `last_full_coverage` in `data/fetch_state.json`
 - [ ] `refresh.py` stages 0–5 (data), resumable — code written 2026-09-29 (`scripts/refresh.py`); preflight tested; full run = the first real refresh (below). Stage 3 first retires the previous build's raw CSV: after v3 it still holds the whole 1.7 GB `--full` build, which would block an incremental build (see the ADR-019 amendment)
-- [ ] stages 6–8 (train, release, report) + promotion checks; migration 005 (`model_runs.release`)
+- [ ] stages 6–8 (train, release, report) + promotion checks; migration 005 (`model_runs.release`) — code written 2026-09-30 (`release.py candidate | report | promote | reject | rollback | sync-db`, `scripts/release_report.py`; choices in ADR-019's *Implementation choices*). Dry run on v3 passed 2026-09-30 (r1 packaged as a pretend r2: artifacts reproduce, zero differences, verdict PASS; the report takes ~6 min at 200 resamples). Still to do: apply migration 005 to Supabase, then `release.py sync-db r1`
 - [ ] The DB loader only upserts: prune markets dropped from a new dataset version (the 13 ADR-023 drops were deleted by hand)
 - [ ] First real run: v4 (the 737+ new markets) → candidate `r2`
 
@@ -80,6 +80,7 @@ Search → market detail page (the production models + gap, prediction history, 
 
 ## Parked — to do, not yet scheduled
 
+- **Run refreshes on a cloud machine.** A refresh takes ~2 h and dies if the laptop sleeps or VS Code quits. An EC2 instance in the bucket's region (or another scheduled runner) could run `refresh.py` unattended, e.g. weekly. Needs: credentials, the data pulled on the machine, the log folder synced back. Suggested 2026-09-30.
 - **Walk-forward backtest.** Train at each quarterly cutoff from 2025 Q1, predict the next quarter, and pool the results. It shows:
   - whether the edge over the market is stable across periods;
   - when the models fail;
