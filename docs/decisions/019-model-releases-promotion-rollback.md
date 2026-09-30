@@ -96,7 +96,7 @@ python scripts/release.py status | report rN | promote rN | reject rN | rollback
 | 0 | **Preflight** | Clean git tree; local data matches the LATEST dataset manifest (`sync.py status`); `meta_checks.py` passes; production release known | any check fails |
 | 1 | **Fetch** | `fetch_markets.py` incremental by end date (ADR-020) | the fetch fails, or finds 0 new markets (nothing to do) |
 | 2 | **Move the split** | `recompute_split.py`: 80/20 by resolution time over all markets, so T moves forward (see *Split* below) | T would move backwards |
-| 3 | **Build** | `run_pipeline.py --skip-markets --skip-trends`: snapshots for new markets only, merge, categorise new markets, Trends join (existing Trends data), leakage filter | any step fails |
+| 3 | **Build** | Retire the previous build's raw CSV (see below), then `run_pipeline.py --skip-markets --skip-trends`: snapshots for new markets only, merge, categorise new markets, Trends join (existing Trends data), leakage filter | any step fails |
 | 4 | **Data gates** | `meta_checks.py`; `coverage_check.py` over recent end dates (see *Coverage*); `check_snapshots.py --compare-with <parent>`; `smoke_test.py` | any gate fails |
 | 5 | **Publish** | `stage_backup.py`, then `sync.py publish vN+1 --parent vN` with an auto-generated note (counts, new T) | publish refuses |
 | 6 | **Train** | LR, XGBoost, RF with production's settings (`--params`), unless `--tune` | a model fails |
@@ -113,7 +113,13 @@ Consequence: each dataset version has its own test set. So releases are never co
 
 ### Coverage: recent window by default, full recount occasionally
 
-A full `coverage_check.py` walks ~1M raw markets (~3.4 h). A market can only be missed if it closed since the previous fetch, so the default refresh checks scheduled end dates from **previous fetch − 90 days** onwards. That's three times ADR-020's 30-day look-back, so it also tests that assumption. The refresh runs the **full recount automatically when the last one is more than 30 days old** (or with `--full-coverage`), so nobody has to remember. The date of the last full recount is kept in `data/fetch_state.json`, and the manifest records which check ran. This refines ADR-020 decision 4.
+A full `coverage_check.py` walks ~1M raw markets (~3.4 h). A market can only be missed if it closed since the previous fetch, so the default refresh checks scheduled end dates from **previous fetch − 90 days** onwards (`--end-from`). That still takes ~40 min, because recent months hold most of the raw catalogue (~117k raw markets a month in 2026). First run, 2026-09-29, from 2026-06-27: 42 min, 0 missed, 753 new. That's three times ADR-020's 30-day look-back, so it also tests that assumption. The refresh runs the **full recount automatically when the last one is more than 30 days old** (or with `--full-coverage`), so nobody has to remember. The date of the last full recount is kept in `data/fetch_state.json`, and the manifest records which check ran. This refines ADR-020 decision 4.
+
+### Retiring the previous build's raw CSV
+
+`build_snapshots.py` appends to `data/polymarket_ml_dataset.csv` and nothing clears it. After v3 it still holds the full v3 rebuild (1.7 GB, built with `--full`). Its settings guard would refuse to append an incremental build to it. Even without the guard, `fix_dataset.py` would re-merge every market and `check_snapshots.py` would re-check them.
+
+So before building, the refresh verifies that every market in the CSV is already in the parent's published raw parquet, then deletes the CSV and its `.build.json`. Its rows live on in that parquet, and in the S3 staging backup from when it was built. The new CSV then holds only this refresh's markets. If any CSV market is missing from the parent, the refresh stops: that CSV was never published.
 
 ### Data gate: compare with the parent version
 

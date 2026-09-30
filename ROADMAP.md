@@ -47,8 +47,8 @@ Schema in `db/migrations/001_initial_schema.sql` (5 tables). Holds v3 since 2026
 Build order:
 - [x] `release.py init`: package the current v3 models as `r1` (production) ✓ 2026-09-29. `s3://…/models/r1/`, record in `models/releases/`; each model's saved file reproduced its published v3 predictions
 - [x] `train.py --params` / `--out-dir` and `predict(artifact, df)` for LR, XGBoost, RF ✓ 2026-09-29. Retraining v3 with r1's settings reproduces r1 exactly (LR/XGBoost identical, RF within CSV rounding); LR and XGBoost take ~1 min each, RF ~15 min
-- [ ] `check_snapshots.py` parent-comparison mode; `coverage_check.py` recent-window mode
-- [ ] `refresh.py` stages 0–5 (data), resumable
+- [x] `check_snapshots.py --parent vN` (market-by-market vs the parent: identical rows apart from `split`; v3 vs itself: 39,588 markets identical) and `coverage_check.py --end-from` (recent window, ~40 min; 0 missed, 753 new since the v3 fetch) ✓ 2026-09-29. A passing full recount is recorded as `last_full_coverage` in `data/fetch_state.json`
+- [ ] `refresh.py` stages 0–5 (data), resumable. Stage 3 first retires the previous build's raw CSV: after v3 it still holds the whole 1.7 GB `--full` build, which would block an incremental build (see the ADR-019 amendment)
 - [ ] stages 6–8 (train, release, report) + promotion checks; migration 005 (`model_runs.release`)
 - [ ] The DB loader only upserts: prune markets dropped from a new dataset version (the 13 ADR-023 drops were deleted by hand)
 - [ ] First real run: v4 (the 737+ new markets) → candidate `r2`

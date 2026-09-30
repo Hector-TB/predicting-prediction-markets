@@ -124,14 +124,24 @@ def load_existing_meta() -> Optional[pd.DataFrame]:
     return df
 
 
+def read_fetch_state() -> dict:
+    return json.loads(FETCH_STATE.read_text()) if FETCH_STATE.exists() else {}
+
+
+def update_fetch_state(**fields) -> None:
+    """Set fields in data/fetch_state.json, keeping the others."""
+    FETCH_STATE.write_text(json.dumps({**read_fetch_state(), **fields}, indent=2) + "\n")
+
+
 def last_fetch_time() -> Optional[pd.Timestamp]:
     """
     When the markets in the meta were last fetched: data/fetch_state.json, else
     the checked-out dataset version's `fetched_on` (ADR-016). Stored explicitly,
     never inferred from the data (ADR-020).
     """
-    if FETCH_STATE.exists():
-        return pd.Timestamp(json.loads(FETCH_STATE.read_text())["last_fetch"])
+    state = read_fetch_state()
+    if state.get("last_fetch"):
+        return pd.Timestamp(state["last_fetch"])
     if LOCAL_MANIFEST.exists():
         fetched_on = json.loads(LOCAL_MANIFEST.read_text()).get("fetched_on")
         if fetched_on:
@@ -140,9 +150,13 @@ def last_fetch_time() -> Optional[pd.Timestamp]:
 
 
 def save_fetch_state(started: pd.Timestamp, mode: str, n_markets: int) -> None:
-    FETCH_STATE.write_text(json.dumps({
-        "last_fetch": started.isoformat(), "mode": mode, "markets": n_markets,
-    }, indent=2) + "\n")
+    update_fetch_state(last_fetch=started.isoformat(), mode=mode, markets=n_markets)
+
+
+def last_full_coverage() -> Optional[pd.Timestamp]:
+    """When scripts/coverage_check.py last passed a full recount (ADR-019), if recorded."""
+    value = read_fetch_state().get("last_full_coverage")
+    return pd.Timestamp(value) if value else None
 
 
 # ─────────────────────────────────────────────
