@@ -35,7 +35,9 @@ from models.common.evaluation import (  # noqa: E402
     evaluate_by_category,
     find_optimal_threshold,
 )
-from models.common.training import fit_calibrator, load_dataset, market_weights, split_holdout  # noqa: E402
+from models.common.training import (  # noqa: E402
+    add_training_args, fit_calibrator, load_dataset, load_params, market_weights, split_holdout,
+)
 
 logging.basicConfig(level=logging.INFO, format="%(message)s")
 log = logging.getLogger(__name__)
@@ -118,7 +120,11 @@ def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--trends", action="store_true",
                         help="add Google Trends features; writes *_trends outputs alongside the base model")
+    add_training_args(parser)
     args = parser.parse_args()
+    params = load_params(args.params, {"clf__C", "clf__penalty", "clf__solver"})
+    artifacts_dir = args.out_dir / "artifacts" if args.out_dir else ARTIFACTS_DIR
+    predictions_dir = args.out_dir / "predictions" if args.out_dir else PREDICTIONS_DIR
     suffix = "_trends" if args.trends else ""
     if args.trends:
         NUMERIC_FEATURES.extend(TREND_FEATURES)
@@ -134,7 +140,7 @@ def main():
     X_test, y_test = test[FEATURES],    test[TARGET].values
     w_fit = market_weights(fit["market_id"])
 
-    best_params = run_grid_search(X_fit, y_fit, w_fit, X_hold, y_hold)
+    best_params = params or run_grid_search(X_fit, y_fit, w_fit, X_hold, y_hold)
 
     log.info("\nTraining final model on fit markets ...")
     pipeline = build_pipeline().set_params(**best_params)
@@ -162,19 +168,19 @@ def main():
 
     print_feature_importance(pipeline)
 
-    ARTIFACTS_DIR.mkdir(parents=True, exist_ok=True)
-    model_path = ARTIFACTS_DIR / f"model{suffix}.joblib"
+    artifacts_dir.mkdir(parents=True, exist_ok=True)
+    model_path = artifacts_dir / f"model{suffix}.joblib"
     joblib.dump({"pipeline": pipeline, "calibrator": iso, "threshold": optimal_threshold,
                  "features": FEATURES, "params": best_params}, model_path)
     log.info("\nModel saved to %s", model_path)
 
-    PREDICTIONS_DIR.mkdir(parents=True, exist_ok=True)
+    predictions_dir.mkdir(parents=True, exist_ok=True)
     pred_df = test[["market_id", "snapshot_timestamp", "category", TARGET]].copy()
     pred_df["pred_prob_raw"]   = y_prob_raw
     pred_df["pred_prob"]       = y_prob_cal
     pred_df["dataset_version"] = dataset_version()
     pred_df["pred_label"]      = (y_prob_cal >= optimal_threshold).astype(int)
-    preds_path = PREDICTIONS_DIR / f"predictions{suffix}.csv"
+    preds_path = predictions_dir / f"predictions{suffix}.csv"
     pred_df.to_csv(preds_path, index=False)
     log.info("Predictions saved to %s", preds_path)
 

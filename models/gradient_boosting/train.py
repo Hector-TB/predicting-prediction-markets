@@ -34,7 +34,9 @@ from models.common.evaluation import (  # noqa: E402
     evaluate_by_category,
     find_optimal_threshold,
 )
-from models.common.training import fit_calibrator, load_dataset, market_weights, split_holdout  # noqa: E402
+from models.common.training import (  # noqa: E402
+    add_training_args, fit_calibrator, load_dataset, load_params, market_weights, split_holdout,
+)
 
 logging.basicConfig(level=logging.INFO, format="%(message)s")
 log = logging.getLogger(__name__)
@@ -82,18 +84,19 @@ def build_preprocessor():
 
 
 def make_classifier(scale_pos_weight: float, **params) -> XGBClassifier:
-    return XGBClassifier(
-        n_estimators=1000,
-        early_stopping_rounds=50,
-        subsample=0.8,
-        colsample_bytree=0.8,
-        scale_pos_weight=scale_pos_weight,
-        tree_method="hist",
-        eval_metric="auc",
-        random_state=42,
-        n_jobs=-1,
+    """Fixed settings plus the tuned ones; given settings (e.g. n_estimators) override the defaults."""
+    return XGBClassifier(**{
+        "n_estimators": 1000,
+        "early_stopping_rounds": 50,
+        "subsample": 0.8,
+        "colsample_bytree": 0.8,
+        "scale_pos_weight": scale_pos_weight,
+        "tree_method": "hist",
+        "eval_metric": "auc",
+        "random_state": 42,
+        "n_jobs": -1,
         **params,
-    )
+    })
 
 
 def print_feature_importance(preprocessor, clf, top_n=20):
@@ -130,7 +133,12 @@ def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--trends", action="store_true",
                         help="add Google Trends features; writes *_trends outputs alongside the base model")
+    add_training_args(parser)
     args = parser.parse_args()
+    # Given settings include the tree count, so no early stopping either
+    params = load_params(args.params, {"learning_rate", "max_depth", "min_child_weight", "n_estimators"})
+    artifacts_dir = args.out_dir / "artifacts" if args.out_dir else ARTIFACTS_DIR
+    predictions_dir = args.out_dir / "predictions" if args.out_dir else PREDICTIONS_DIR
     suffix = "_trends" if args.trends else ""
     if args.trends:
         NUMERIC_FEATURES.extend(TREND_FEATURES)
@@ -153,12 +161,19 @@ def main():
     scale_pos_weight = float((y_fit == 0).sum() / (y_fit == 1).sum())
     log.info("  scale_pos_weight: %.2f", scale_pos_weight)
 
-    best_params = run_grid_search(X_fit_t, y_fit, w_fit, X_hold_t, y_hold, scale_pos_weight)
-
-    log.info("\nTraining XGBoost with best params ...")
-    clf = make_classifier(scale_pos_weight, **best_params)
-    clf.fit(X_fit_t, y_fit, sample_weight=w_fit, eval_set=[(X_hold_t, y_hold)], verbose=100)
-    log.info("  Best iteration: %d  |  Holdout AUC: %.4f", clf.best_iteration, clf.best_score)
+    if params:
+        log.info("\nTraining XGBoost with the given settings (%d trees, no early stopping) ...", params["n_estimators"])
+        clf = make_classifier(scale_pos_weight, **params)
+        clf.set_params(early_stopping_rounds=None)
+        clf.fit(X_fit_t, y_fit, sample_weight=w_fit, verbose=False)
+        saved_params = params
+    else:
+        best_params = run_grid_search(X_fit_t, y_fit, w_fit, X_hold_t, y_hold, scale_pos_weight)
+        log.info("\nTraining XGBoost with best params ...")
+        clf = make_classifier(scale_pos_weight, **best_params)
+        clf.fit(X_fit_t, y_fit, sample_weight=w_fit, eval_set=[(X_hold_t, y_hold)], verbose=100)
+        log.info("  Best iteration: %d  |  Holdout AUC: %.4f", clf.best_iteration, clf.best_score)
+        saved_params = {**best_params, "n_estimators": clf.best_iteration + 1}
 
     log.info("Calibrating with isotonic regression on the holdout ...")
     p_hold_raw = clf.predict_proba(X_hold_t)[:, 1]
@@ -182,20 +197,20 @@ def main():
 
     print_feature_importance(preprocessor, clf)
 
-    ARTIFACTS_DIR.mkdir(parents=True, exist_ok=True)
-    model_path = ARTIFACTS_DIR / f"model{suffix}.joblib"
+    artifacts_dir.mkdir(parents=True, exist_ok=True)
+    model_path = artifacts_dir / f"model{suffix}.joblib"
     joblib.dump({"preprocessor": preprocessor, "clf": clf, "calibrator": iso, "threshold": optimal_threshold,
-                 "features": FEATURES, "params": {**best_params, "n_estimators": clf.best_iteration + 1}},
+                 "features": FEATURES, "params": saved_params},
                 model_path)
     log.info("\nModel saved to %s", model_path)
 
-    PREDICTIONS_DIR.mkdir(parents=True, exist_ok=True)
+    predictions_dir.mkdir(parents=True, exist_ok=True)
     pred_df = test[["market_id", "snapshot_timestamp", "category", TARGET]].copy()
     pred_df["pred_prob_raw"]   = y_prob_raw
     pred_df["pred_prob"]       = y_prob_cal
     pred_df["dataset_version"] = dataset_version()
     pred_df["pred_label"]      = (y_prob_cal >= optimal_threshold).astype(int)
-    preds_path = PREDICTIONS_DIR / f"predictions{suffix}.csv"
+    preds_path = predictions_dir / f"predictions{suffix}.csv"
     pred_df.to_csv(preds_path, index=False)
     log.info("Predictions saved to %s", preds_path)
 

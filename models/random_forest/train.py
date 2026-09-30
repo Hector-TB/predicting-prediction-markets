@@ -14,6 +14,7 @@ Usage:
     python models/random_forest/train.py
 """
 
+import argparse
 import itertools
 import logging
 import sys
@@ -39,7 +40,9 @@ from models.common.evaluation import (  # noqa: E402
     evaluate_by_category,
     find_optimal_threshold,
 )
-from models.common.training import fit_calibrator, load_dataset, market_weights, split_holdout  # noqa: E402
+from models.common.training import (  # noqa: E402
+    add_training_args, fit_calibrator, load_dataset, load_params, market_weights, split_holdout,
+)
 
 logging.basicConfig(level=logging.INFO, format="%(message)s")
 log = logging.getLogger(__name__)
@@ -142,8 +145,14 @@ def log_shap(clf: RandomForestClassifier, X: np.ndarray, features: list[str], to
 
 
 def main():
-    ARTIFACTS_DIR.mkdir(parents=True, exist_ok=True)
-    PREDICTIONS_DIR.mkdir(parents=True, exist_ok=True)
+    parser = argparse.ArgumentParser()
+    add_training_args(parser)
+    args = parser.parse_args()
+    params = load_params(args.params, {"max_depth", "min_samples_leaf"})
+    artifacts_dir = args.out_dir / "artifacts" if args.out_dir else ARTIFACTS_DIR
+    predictions_dir = args.out_dir / "predictions" if args.out_dir else PREDICTIONS_DIR
+    artifacts_dir.mkdir(parents=True, exist_ok=True)
+    predictions_dir.mkdir(parents=True, exist_ok=True)
 
     fit, holdout, test, enc = load_and_split()
 
@@ -159,19 +168,19 @@ def main():
 
     w_fit = market_weights(fit["market_id"])
 
-    best_params = run_grid_search(X_fit_full, y_fit, w_fit, X_hold_full, y_hold)
+    best_params = params or run_grid_search(X_fit_full, y_fit, w_fit, X_hold_full, y_hold)
     rf_params   = {**RF_BASE, **best_params}
 
     log.info("\nTraining rf_price_only (300 trees, default depth=16 leaf=50) ...")
     rf_price = RandomForestClassifier(**RF_BASE, max_depth=16, min_samples_leaf=50)
     rf_price.fit(X_fit_price, y_fit, sample_weight=w_fit)
-    joblib.dump(rf_price, ARTIFACTS_DIR / "rf_price_only.pkl")
+    joblib.dump(rf_price, artifacts_dir / "rf_price_only.pkl")
     log.info("  Saved rf_price_only.pkl")
 
     log.info("Training rf_full (300 trees, best params) ...")
     rf_full = RandomForestClassifier(**rf_params)
     rf_full.fit(X_fit_full, y_fit, sample_weight=w_fit)
-    joblib.dump(rf_full, ARTIFACTS_DIR / "rf_full.pkl")
+    joblib.dump(rf_full, artifacts_dir / "rf_full.pkl")
     log.info("  Saved rf_full.pkl (params: %s)", best_params)
 
     log.info("Calibrating rf_full with isotonic regression on the holdout ...")
@@ -182,7 +191,7 @@ def main():
     threshold, _ = find_optimal_threshold(y_hold, iso.transform(p_hold_raw))
     joblib.dump({"rf": rf_full, "iso": iso, "threshold": threshold, "encoder": enc,
                  "features": FEATURES_FULL, "params": best_params},
-                ARTIFACTS_DIR / "rf_full_calibrated.pkl")
+                artifacts_dir / "rf_full_calibrated.pkl")
     log.info("  Saved rf_full_calibrated.pkl")
 
     proba_price = rf_price.predict_proba(X_test_price)[:, 1]
@@ -208,7 +217,7 @@ def main():
     pred_df["proba_price_only"]      = proba_price.round(6)
     pred_df["proba_full"]            = proba_full.round(6)
     pred_df["proba_full_calibrated"] = proba_cal.round(6)
-    out = PREDICTIONS_DIR / "test_predictions.csv"
+    out = predictions_dir / "test_predictions.csv"
     pred_df.to_csv(out, index=False)
     log.info("\nSaved %s rows → %s", f"{len(pred_df):,}", out)
 
