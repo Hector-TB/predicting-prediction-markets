@@ -18,7 +18,9 @@ which production never trained on (T only moves forward). Sections:
 """
 
 import json
+import logging
 import subprocess
+import time
 from pathlib import Path
 
 import numpy as np
@@ -28,6 +30,8 @@ from models.common.evaluation import (
     bootstrap_auc_diff, bootstrap_loss_diff, compute_metrics, expected_calibration_error,
 )
 from models.common.training import market_weights
+
+log = logging.getLogger(__name__)
 
 ROOT = Path(__file__).resolve().parent.parent
 MANIFESTS_DIR = ROOT / "data" / "manifests"
@@ -137,7 +141,8 @@ def metrics_section(test: pd.DataFrame, preds: dict, prod: dict, cand: dict, n_b
              f"95% CIs from {n_boot} market-level bootstrap resamples (ADR-015). Higher AUC is better; lower "
              "log-loss, Brier and calibration error (ECE) are better."]
     diffs = {}
-    for label, w in [("Every snapshot counted", None), ("Each market counted once", market_weights(g))]:
+    for label, key, w in [("Every snapshot counted", "per_snapshot", None),
+                          ("Each market counted once", "per_market", market_weights(g))]:
         rows, drows = [], []
         base = compute_metrics(y, market, sample_weight=w)
         rows.append(["Market price", f"{base['auc']:.4f}", f"{base['log_loss']:.4f}", f"{base['brier']:.4f}",
@@ -147,9 +152,12 @@ def metrics_section(test: pd.DataFrame, preds: dict, prod: dict, cand: dict, n_b
                 s = compute_metrics(y, p, sample_weight=w)
                 rows.append([f"{SHORT[name]} {rel}", f"{s['auc']:.4f}", f"{s['log_loss']:.4f}", f"{s['brier']:.4f}",
                              f"{expected_calibration_error(y, p):.4f}" if w is None else "—"])
+            t0 = time.time()
             a = bootstrap_auc_diff(y, pp, pc, n_boot=n_boot, groups=g, verbose=False, sample_weight=w)
             loss = bootstrap_loss_diff(y, pp, pc, groups=g, n_boot=n_boot, sample_weight=w)
-            vs_market = bootstrap_auc_diff(y, market, pc, n_boot=n_boot, groups=g, verbose=False, sample_weight=w)
+            # The candidate vs the market on these same rows was bootstrapped when it was packaged
+            vs_market = cand["models"][name]["metrics"][key]["vs_market"]["auc"]
+            log.info("  %s, %s: %.0f s", SHORT[name], key, time.time() - t0)
             drows.append([SHORT[name], ci(a), ci(loss["log_loss"]), ci(loss["brier"]), ci(vs_market)])
             if w is None:
                 diffs[name] = {"auc": a, "log_loss": loss["log_loss"], "vs_market": vs_market,
