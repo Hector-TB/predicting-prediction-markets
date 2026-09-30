@@ -98,7 +98,7 @@ python scripts/release.py status | report rN | promote rN | reject rN | rollback
 | 2 | **Move the split** | `recompute_split.py`: 80/20 by resolution time over all markets, so T moves forward (see *Split* below) | T would move backwards |
 | 3 | **Build** | Retire the previous build's raw CSV (see below), then `run_pipeline.py --skip-markets --skip-trends`: snapshots for new markets only, merge, categorise new markets, Trends join (existing Trends data), leakage filter | any step fails |
 | 4 | **Data gates** | `meta_checks.py`; `coverage_check.py` over recent end dates (see *Coverage*); `check_snapshots.py --compare-with <parent>`; `smoke_test.py` | any gate fails |
-| 5 | **Publish** | `stage_backup.py`, then `sync.py publish vN+1 --parent vN` with an auto-generated note (counts, new T) | publish refuses |
+| 5 | **Publish** | `sync.py publish vN+1 --parent vN` with an auto-generated note (counts, new T, which gates ran); the manifest copy is committed. No `stage_backup.py`: it uploads the same files `publish` uploads a minute later (~70 min last time) | publish refuses |
 | 6 | **Train** | LR, XGBoost, RF with production's settings (`--params`), unless `--tune` | a model fails |
 | 7 | **Candidate release** | Upload to `s3://…/models/rN/`: the three artifacts (model + calibrator + threshold), test predictions, `manifest.json` (status `candidate`); commit a copy to `models/releases/rN.json` | upload fails |
 | 8 | **Change report** | `models/releases/rN_report.md` vs production (see *Report*); run the promotion checks and print the verdict | — (a failed check marks the release `rejected`) |
