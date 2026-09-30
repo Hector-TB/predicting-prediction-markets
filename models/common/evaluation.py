@@ -120,6 +120,18 @@ def compute_metrics(y_true, y_prob, sample_weight=None) -> dict:
     }
 
 
+def expected_calibration_error(y_true, y_prob, n_bins: int = 10) -> float:
+    """
+    Mean |predicted − actual YES rate| over equal-width probability bins, each bin
+    weighted by its share of rows. 0 = perfectly calibrated.
+    """
+    y_true, y_prob = np.asarray(y_true, dtype=float), np.asarray(y_prob, dtype=float)
+    idx = np.clip(np.digitize(y_prob, np.linspace(0, 1, n_bins + 1)) - 1, 0, n_bins - 1)
+    n = np.bincount(idx, minlength=n_bins)
+    gap = np.abs(np.bincount(idx, weights=y_prob, minlength=n_bins) - np.bincount(idx, weights=y_true, minlength=n_bins))
+    return float(gap.sum() / n.sum())
+
+
 def bootstrap_auc_diff(y_true, y_prob_base, y_prob_new, n_boot: int = 1000, seed: int = 42,
                        groups=None, verbose: bool = True, sample_weight=None):
     """

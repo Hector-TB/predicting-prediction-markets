@@ -1,8 +1,8 @@
 """
 scripts/refresh.py
 ==================
-One-command refresh (ADR-019): new markets → dataset vN+1 → (later stages)
-candidate release. Stages, each recorded in logs/refresh_<run id>/state.json:
+One-command refresh (ADR-019): new markets → dataset vN+1 → candidate release rN
+→ change report vs production. Stages, each recorded in logs/refresh_<run id>/state.json:
 
   0 preflight   clean git; local data = the LATEST published version; meta checks;
                 a production release exists
@@ -13,8 +13,13 @@ candidate release. Stages, each recorded in logs/refresh_<run id>/state.json:
   4 gates       meta checks; coverage (recent window, or full if the last full recount
                 is > 30 days old); check_snapshots --parent; smoke test
   5 publish     sync.py publish vN+1 --parent vN; commit data/manifests/vN+1.json
+  6 train       LR, XGBoost, RF with production's settings (--tune: re-run the search),
+                into logs/refresh_<run id>/models/<model>/
+  7 release     release.py candidate: upload rN (status candidate); commit its manifest
+  8 report      release.py report rN: change report + promotion checks (a failure marks
+                rN rejected); commit models/releases/
 
-Stages 6–8 (train, candidate release, change report) come next (ROADMAP step 4).
+Promotion is never part of the refresh: python scripts/release.py promote rN.
 
 Usage:
     python scripts/refresh.py                  # new run
@@ -22,6 +27,7 @@ Usage:
     python scripts/refresh.py --stop-after 0   # run up to and including a stage
     python scripts/refresh.py --no-publish     # stop before publishing
     python scripts/refresh.py --full-coverage  # full coverage recount regardless of age
+    python scripts/refresh.py --tune           # re-run each model's settings search (stage 6)
 """
 
 import argparse
@@ -51,13 +57,14 @@ from sync import (  # noqa: E402
 
 log = logging.getLogger(__name__)
 
-STAGES = ["preflight", "fetch", "split", "build", "gates", "publish"]
+STAGES = ["preflight", "fetch", "split", "build", "gates", "publish", "train", "release", "report"]
 COVERAGE_LOOKBACK_DAYS = 90     # ADR-019: 3× the fetch's 30-day look-back
 FULL_COVERAGE_EVERY_DAYS = 30
 META = DATA / "polymarket_markets_meta.csv"
 RAW_CSV = DATA / "polymarket_ml_dataset.csv"
 RAW_PQ = DATA / "polymarket_ml_dataset.parquet"
 CLOSED = DATA / "market_closed_times.csv"
+RELEASES_DIR = ROOT / "models" / "releases"
 VERIFY_FILES = ["polymarket_markets_meta.csv", "polymarket_ml_dataset.parquet",
                 "polymarket_ml_dataset_clean.parquet", "polymarket_ml_dataset_with_trends_clean.parquet"]
 
@@ -245,7 +252,72 @@ def stage_publish(run: Run, args) -> None:
     log.info("  Published %s; manifest committed", version)
 
 
-RUNNERS = dict(zip(STAGES, [stage_preflight, stage_fetch, stage_split, stage_build, stage_gates, stage_publish]))
+TRAIN_SCRIPTS = {"logistic_regression": "models/logistic_regression/train.py",
+                 "gradient_boosting": "models/gradient_boosting/train.py",
+                 "random_forest": "models/random_forest/train.py"}
+
+
+def commit(paths: list[Path], message: str) -> None:
+    subprocess.run(["git", "add", *map(str, paths)], cwd=ROOT, check=True)
+    if subprocess.run(["git", "diff", "--cached", "--quiet"], cwd=ROOT).returncode:
+        subprocess.run(["git", "commit", "-q", "-m", message, "--", *map(str, paths)], cwd=ROOT, check=True)
+
+
+def stage_train(run: Run, args) -> None:
+    """One model at a time (8 GB RAM); a resumed run skips models already trained."""
+    local = json.loads((DATA / "manifest.json").read_text())["version"]
+    if local != run["next_version"]:
+        raise StageFailed(f"local data is {local}, expected {run['next_version']} (published in stage 5).")
+    s3 = make_client()
+    prod = read_text(s3, "models/PRODUCTION").strip()
+    prod_models = json.loads(read_text(s3, f"models/{prod}/manifest.json"))["models"]
+    run["production"] = prod
+    tune = args.tune or run.state.get("tune", False)
+    run["tune"] = tune
+    trained = run.state.get("trained", [])
+    for name, script in TRAIN_SCRIPTS.items():
+        if name in trained:
+            log.info("  %s — trained earlier", name)
+            continue
+        cmd = [str(ROOT / script), "--out-dir", str(run.dir / "models" / name)]
+        if not tune:
+            cmd += ["--params", json.dumps(prod_models[name]["settings"])]
+        run_step(run, f"train_{name}", cmd)
+        run["trained"] = trained = trained + [name]
+    log.info("  Trained with %s", "a fresh settings search (--tune)" if tune else f"{prod}'s settings")
+
+
+def stage_release(run: Run, args) -> None:
+    s3 = make_client()
+    if "release" not in run.state:
+        r = s3.list_objects_v2(Bucket=BUCKET, Prefix="models/", Delimiter="/")
+        names = [p["Prefix"].split("/")[1] for p in r.get("CommonPrefixes", [])]
+        run["release"] = f"r{max(int(n[1:]) for n in names if n[1:].isdigit()) + 1}"
+    release = run["release"]
+    if not exists(s3, f"models/{release}/manifest.json"):
+        notes = (f"Refresh {run['run_id']}: {run['next_version']} (+{run['markets_added']:,} markets), "
+                 + ("settings re-tuned." if run["tune"] else f"{run['production']}'s settings."))
+        run_step(run, "release", [str(ROOT / "scripts" / "release.py"), "candidate", "--from", str(run.dir / "models"),
+                                  "--name", release, "--notes", notes])
+    commit([RELEASES_DIR / f"{release}.json"], f"Candidate release {release} (refresh {run['run_id']})")
+    log.info("  %s uploaded as a candidate", release)
+
+
+def stage_report(run: Run, args) -> None:
+    release = run["release"]
+    run_step(run, "report", [str(ROOT / "scripts" / "release.py"), "report", release])
+    commit([RELEASES_DIR], f"Release {release} change report (refresh {run['run_id']})")
+    m = json.loads((RELEASES_DIR / f"{release}.json").read_text())
+    run["verdict"] = "pass" if m["checks"]["passed"] else "fail"
+    log.info("  Verdict: %s — models/releases/%s_report.md", run["verdict"].upper(), release)
+    if m["checks"]["passed"]:
+        log.info("  To make it production: python scripts/release.py promote %s", release)
+    else:
+        log.info("  %s rejected; %s stays in production.", release, run["production"])
+
+
+RUNNERS = dict(zip(STAGES, [stage_preflight, stage_fetch, stage_split, stage_build, stage_gates, stage_publish,
+                            stage_train, stage_release, stage_report]))
 
 
 def main():
@@ -255,6 +327,7 @@ def main():
     parser.add_argument("--stop-after", type=int, choices=range(len(STAGES)), help="last stage to run")
     parser.add_argument("--no-publish", action="store_true", help="stop before stage 5")
     parser.add_argument("--full-coverage", action="store_true", help="full coverage recount regardless of age")
+    parser.add_argument("--tune", action="store_true", help="stage 6: re-run each model's settings search")
     args = parser.parse_args()
 
     if not args.resume:
@@ -282,7 +355,8 @@ def main():
 
     if last == len(STAGES) - 1:
         run["finished"] = now()
-        log.info("\nRefresh %s complete: %s published.", run["run_id"], run["next_version"])
+        log.info("\nRefresh %s complete: %s published, candidate %s (%s).", run["run_id"], run["next_version"],
+                 run["release"], run["verdict"])
     else:
         log.info("\nStopped after stage %d (%s). Continue with --resume.", last, STAGES[last])
 

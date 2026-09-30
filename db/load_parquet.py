@@ -177,7 +177,7 @@ def upsert_model_run(conn, model_name: str, dataset_tag: str,
         cur.execute(
             """INSERT INTO model_runs (model_name, dataset_tag, notes, metrics)
                VALUES (%s, %s, %s, %s::jsonb)
-               ON CONFLICT (model_name, dataset_tag)
+               ON CONFLICT (model_name, dataset_tag, release)
                DO UPDATE SET metrics = EXCLUDED.metrics, notes = EXCLUDED.notes
                RETURNING id""",
             (model_name, dataset_tag, notes, json.dumps(metrics)),
