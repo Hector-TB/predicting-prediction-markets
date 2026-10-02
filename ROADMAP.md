@@ -61,6 +61,7 @@ Build order:
 - ~~Decide and apply ADR-018~~ ✓ `log_volume` dropped (ADR-021)
 - Refactor the per-snapshot feature code in `build_snapshots.py` into a shared function used by training and the API; test it reproduces training snapshots exactly
 - DB migration: full feature vector + warnings on `snapshots`; resolution status on `markets`
+- Decide how `/predict` handles open markets with no `endDate` (11 of 500 sampled on 2026-10-01, e.g. the 2026 Senate-seat markets) or an `endDate` already passed (39 of 500): the time features need one. Training drops these (`fetch_markets.py`, `bad_dates`). Also check whether Polymarket edits `endDate` while a market is open: meta stores the final value, so time features could see an end date that wasn't known yet at snapshot time (cf. ADR-018)
 
 ### 6. FastAPI backend
 - `GET /resolve?q=` — URL / slug / event / condition ID / name → market(s)
@@ -96,6 +97,7 @@ Search → market detail page (the production models + gap, prediction history, 
   Gets its own ADR when built.
 - **Rework Google Trends.** Category-level keywords, one 0–100 scale over the whole period (the scale depends on later peaks, so it isn't point-in-time), weekly granularity (ADR-009 amendment). The Trends model variants stay untrained until then; RQ2 of the paper waits for it.
 - **Volume to date.** Cumulative traded volume up to each snapshot from `data-api.polymarket.com/trades` (ADR-018 option 2). That endpoint caps at ~10.5k trades per market; large markets need another source (e.g. the orderbook subgraph). New ADR + dataset version.
+- **Test other rolling windows (ADR-003 was never searched exhaustively).** Price history is fetched at `fidelity=720` (one point per 12 h), so a 3d window has 6 points and anything under 1 day is impossible without a finer re-fetch. XGBoost (r1) puts ~57% of its gain on 7d features and ~15% on 14d, almost all of it on min/max; the volatility/trend/change features get < 2% together. Try adding 3d (and maybe 30d), and dropping the unused stats; keep it only if the holdout AUC improves (ADR-024). Needs a snapshot rebuild → new dataset version + ADR. Suggested 2026-10-01.
 - **Realistic trading fills.** The trading simulation assumes fills at the recorded price. Large model–market gaps are probably more common in thin markets, where that price may be a stale last trade. Needs order-book / spread history.
 - **Incremental merge and leakage steps.** They rewrite the whole parquet each run (~20–40 min). Only if it becomes a problem.
 - **Clean-up** (no rush):
