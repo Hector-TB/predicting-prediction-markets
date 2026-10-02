@@ -218,22 +218,36 @@ def stage_build(run: Run, args) -> None:
 
 
 def stage_gates(run: Run, args) -> None:
-    run_step(run, "meta_checks", [str(PIPELINE / "meta_checks.py")])
+    """Each gate that passes is recorded, so a resumed run only reruns the gates that haven't."""
+    passed = run.state.get("gates_passed", [])
 
-    last_full = last_full_coverage()
-    due = last_full is None or (pd.Timestamp.now(tz="UTC") - last_full).days > FULL_COVERAGE_EVERY_DAYS
-    if args.full_coverage or due:
-        log.info("  Coverage: full recount (last full: %s)", last_full)
-        run_step(run, "coverage", [str(ROOT / "scripts" / "coverage_check.py")])
-        run["coverage"] = "full"
+    def gate(name: str, cmd: list[str]) -> None:
+        nonlocal passed
+        if name in passed:
+            log.info("  %s — passed earlier in this run", name)
+            return
+        run_step(run, name, cmd)
+        run["gates_passed"] = passed = passed + [name]
+
+    gate("meta_checks", [str(PIPELINE / "meta_checks.py")])
+
+    if "coverage" not in passed:
+        last_full = last_full_coverage()
+        due = last_full is None or (pd.Timestamp.now(tz="UTC") - last_full).days > FULL_COVERAGE_EVERY_DAYS
+        if args.full_coverage or due:
+            log.info("  Coverage: full recount (last full: %s)", last_full)
+            cmd, run["coverage"] = [str(ROOT / "scripts" / "coverage_check.py")], "full"
+        else:
+            end_from = (pd.Timestamp(run["prev_fetch"]) - pd.Timedelta(days=COVERAGE_LOOKBACK_DAYS)).strftime("%Y-%m-%d")
+            log.info("  Coverage: scheduled end >= %s (last full recount %s)", end_from, last_full.date())
+            cmd = [str(ROOT / "scripts" / "coverage_check.py"), "--end-from", end_from]
+            run["coverage"] = f"recent window from {end_from}"
+        gate("coverage", cmd)
     else:
-        end_from = (pd.Timestamp(run["prev_fetch"]) - pd.Timedelta(days=COVERAGE_LOOKBACK_DAYS)).strftime("%Y-%m-%d")
-        log.info("  Coverage: scheduled end >= %s (last full recount %s)", end_from, last_full.date())
-        run_step(run, "coverage", [str(ROOT / "scripts" / "coverage_check.py"), "--end-from", end_from])
-        run["coverage"] = f"recent window from {end_from}"
+        log.info("  coverage — passed earlier in this run (%s)", run["coverage"])
 
-    run_step(run, "check_snapshots", [str(ROOT / "scripts" / "check_snapshots.py"), "--parent", run["parent"]])
-    run_step(run, "smoke_test", [str(ROOT / "scripts" / "smoke_test.py")])
+    gate("check_snapshots", [str(ROOT / "scripts" / "check_snapshots.py"), "--parent", run["parent"]])
+    gate("smoke_test", [str(ROOT / "scripts" / "smoke_test.py")])
 
 
 def stage_publish(run: Run, args) -> None:

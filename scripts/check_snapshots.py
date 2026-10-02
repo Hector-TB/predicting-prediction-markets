@@ -7,7 +7,8 @@ Streams the data in chunks, so it runs in well under 1 GB of RAM.
 1. Raw build (data/polymarket_ml_dataset.csv), every row:
    structure (duplicates, one block per market, exact 12h spacing), window
    (burn-in, scheduled end, closedTime), agreement with meta (outcome, split,
-   category), value invariants (price range, rolling-feature consistency).
+   category where set: new markets are categorised after the build, so their
+   CSV rows have none), value invariants (price range, rolling-feature consistency).
 2. Comparison with a published version's raw snapshots (default v2) on shared
    markets. Differences must be explained:
      - v3 raw rows are cleaned the same way first (fix_dataset.fix_chunk)
@@ -15,14 +16,15 @@ Streams the data in chunks, so it runs in well under 1 GB of RAM.
      - rows only in the old version must be after closedTime
      - rows only in the new one must be in the last ~14 days (ADR-022)
 3. Training files (*_clean.parquet): no market in two splits, cutoff respected
-   (ADR-021), no settled prices, no NaN features, outcome = meta, and both
-   clean files hold exactly the same rows.
+   (ADR-021), no settled prices, no NaN features, outcome and category = meta,
+   and both clean files hold exactly the same rows.
 
 With --parent vN (incremental builds, ADR-019), step 2 is replaced by a
 comparison of the merged raw parquet with the parent version's, market by market:
   - every parent market is still there, with identical rows except `split`
     (T moves on every refresh); a changed category is reported, not failed;
-  - every market that is new is in this build's raw CSV.
+  - every market that is new is in this build's raw CSV;
+  - every market's category in the merged raw parquet equals meta's.
 
 Exits non-zero if anything is unexplained.
 
@@ -117,8 +119,14 @@ def check_raw(m: pd.DataFrame, old_path: Path | None) -> tuple[Counter, Counter,
         issues["before 14-day burn-in"] += int((df["ts"] < start + pd.Timedelta(days=14) - second).sum())
         issues["after scheduled end"] += int((df["ts"] > end + second).sum())
         issues["after closedTime"] += int((df["ts"] > closed + second).sum())
-        for col in ["outcome", "split", "category"]:
+        for col in ["outcome", "split"]:
             issues[f"{col} differs from meta"] += int((df[col].astype(str) != ids.map(m[col]).astype(str)).sum())
+        # categorize_markets.py assigns new markets' categories after the build, in the
+        # merged parquet and meta; the clean and parent checks compare those with meta
+        has_cat = df["category"].notna()
+        issues["category differs from meta"] += int(
+            (df.loc[has_cat, "category"].astype(str) != ids[has_cat].map(m["category"]).astype(str)).sum())
+        notes["category blank (assigned after the build)"] += int((~has_cat).sum())
         # values
         notes["price outside [0,1] (clipped by fix_dataset)"] += int(
             ((df["price_at_snapshot"] < 0) | (df["price_at_snapshot"] > 1)).sum())
@@ -217,9 +225,14 @@ def market_digests(path: Path, exclude: list[str]) -> dict[str, tuple]:
     return {k: tuple(v) for k, v in out.items()}
 
 
-def check_against_parent(parent_path: Path) -> tuple[Counter, Counter]:
+def check_against_parent(parent_path: Path, meta: pd.DataFrame) -> tuple[Counter, Counter]:
     """Merged raw parquet vs the parent version's (incremental builds, ADR-019)."""
     issues, notes = Counter(), Counter()
+    category = meta.set_index("market_id")["category"].astype(str)
+    for df in iter_frames(RAW_PQ, columns=["market_id", "category"]):
+        bad = df["category"].astype(str) != df["market_id"].map(category)
+        issues["raw parquet category differs from meta"] += int(bad.sum())
+        note_ids("raw parquet category differs from meta", df.loc[bad, "market_id"].unique())
     built = set()
     if RAW_CSV.exists():
         for chunk in pd.read_csv(RAW_CSV, usecols=["market_id"], chunksize=CHUNK_ROWS):
@@ -252,6 +265,7 @@ def check_clean(meta: pd.DataFrame, closed_times: pd.DataFrame) -> tuple[Counter
     issues = Counter()
     cutoff = split_cutoff(closed_times)
     outcome = meta.set_index("market_id")["outcome"]
+    category = meta.set_index("market_id")["category"].astype(str)
     markets: dict[str, set] = {}
     rng: dict[str, list] = {}
     rows: Counter = Counter()
@@ -276,6 +290,8 @@ def check_clean(meta: pd.DataFrame, closed_times: pd.DataFrame) -> tuple[Counter
             feats = [c for c in df.columns if c not in TEXT_COLS]
             issues["NaN in features"] += int(df[feats].isna().sum().sum())
             issues["outcome differs from meta"] += int((df["outcome"] != df["market_id"].map(outcome)).sum())
+            issues["category differs from meta"] += int(
+                (df["category"].astype(str) != df["market_id"].map(category)).sum())
         digest[path.name] = (n, h)
 
     issues["market in train and test"] = len(markets.get("train", set()) &
@@ -321,7 +337,7 @@ def main(compare_with: str | None, parent: str | None = None) -> int:
         if parent:
             parent_path = download_raw(parent, Path(tmp) / f"{parent}_raw.parquet")
             log.info("Comparing %s with %s's, market by market ...", RAW_PQ.name, parent)
-            issues, notes = check_against_parent(parent_path)
+            issues, notes = check_against_parent(parent_path, meta)
             failed += report(f"VS PARENT {parent}", issues, notes)
 
     closed = pd.read_csv(DATA / "market_closed_times.csv")
