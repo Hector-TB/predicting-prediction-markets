@@ -1,0 +1,123 @@
+{
+  "version": "v4",
+  "created_at": "2026-10-02T18:16:16+00:00",
+  "parent": "v3",
+  "notes": "Refresh 20260930_014318 of v3: +769 markets (incremental fetch by end date, ADR-020); T 2026-07-01 07:11 \u2192 2026-07-02 15:09 (ADR-021). Gates passed: meta checks, coverage (recent window from 2026-06-27), check_snapshots --parent v3, smoke test. Trends as in v3.",
+  "fetched_on": "2026-09-30",
+  "code": {
+    "git_commit": "54037be03eec0bf10fe33074a76991642257fe2b",
+    "git_branch": "one-command-refresh",
+    "uncommitted_changes": false,
+    "adrs": [
+      "001",
+      "002",
+      "003",
+      "004",
+      "005",
+      "006",
+      "007",
+      "008",
+      "009",
+      "010",
+      "011",
+      "012",
+      "013",
+      "014",
+      "015",
+      "016",
+      "017",
+      "018",
+      "019",
+      "020",
+      "021",
+      "022",
+      "023",
+      "024"
+    ]
+  },
+  "contents": {
+    "markets_fetched": 45899,
+    "market_start_date_min": "2020-10-02",
+    "market_start_date_max": "2026-09-28",
+    "markets_fetched_by_split": {
+      "train": 36719,
+      "test": 9180
+    },
+    "clean_snapshots": 2581017,
+    "clean_markets": 30177,
+    "clean_snapshots_by_split": {
+      "train": 2090737,
+      "test": 227280,
+      "test_pre_cutoff": 263000
+    },
+    "clean_markets_by_split": {
+      "train": 23598,
+      "test": 5457,
+      "test_pre_cutoff": 2930
+    },
+    "clean_snapshot_yes_rate": 0.2728,
+    "snapshot_timestamp_min": "2022-11-30 02:08:51.147000+00:00",
+    "snapshot_timestamp_max": "2026-09-30 04:22:08.683840+00:00",
+    "snapshot_range_by_split": {
+      "train": [
+        "2022-11-30 02:08:51.147000+00:00",
+        "2026-07-02 02:59:29.786606+00:00"
+      ],
+      "test": [
+        "2026-07-02 15:10:42.662407+00:00",
+        "2026-09-30 04:22:08.683840+00:00"
+      ],
+      "test_pre_cutoff": [
+        "2025-05-26 22:26:22.665665+00:00",
+        "2026-07-02 15:08:01.364047+00:00"
+      ]
+    }
+  },
+  "files": {
+    "polymarket_markets_meta.csv": {
+      "bytes": 13808508,
+      "sha256": "8241faf13b1c95acebb13130d9665a9351a2d6fbc0cb6c8c11077df439eab6b3",
+      "rows": null
+    },
+    "polymarket_ml_dataset_clean.parquet": {
+      "bytes": 97510910,
+      "sha256": "12354e47ab7dc78b1985bdc75545e68f4761cca6901f3eddac36cd18e3d429c5",
+      "rows": 2581017
+    },
+    "polymarket_ml_dataset_with_trends_clean.parquet": {
+      "bytes": 116433599,
+      "sha256": "8dd6a1380161e823f218a1092f721b64e38de67d685e811811dd546710f4cfab",
+      "rows": 2581017
+    },
+    "polymarket_ml_dataset.parquet": {
+      "bytes": 175691860,
+      "sha256": "602a682eee7b3e147afae470cf0dd58a1759aad4a9b7ef9a2c033f33fad6a563",
+      "rows": 5538639
+    },
+    "polymarket_ml_dataset_with_trends.parquet": {
+      "bytes": 220350538,
+      "sha256": "384bb0e7188cb72afd0b65e889d30e42ff71e85cbed4b6965ecabe05e7f27823",
+      "rows": 5538639
+    },
+    "category_trends_features.parquet": {
+      "bytes": 15614,
+      "sha256": "96834a17ed2d4f04fb37f099553de91fcda122e6db76e271ccdf1b247c530804",
+      "rows": 1755
+    },
+    "category_trends_raw.csv": {
+      "bytes": 41621,
+      "sha256": "301d4160b738ed720cc2c8172e4e180d000f71bef8ff5cb588a4acb8eecb9c7b",
+      "rows": null
+    },
+    "market_closed_times.csv": {
+      "bytes": 4270856,
+      "sha256": "f2973f8e2be76ffb9e4d151ef77e11f857004d93214c117be6f00930b07445f5",
+      "rows": null
+    },
+    "fetch_state.json": {
+      "bytes": 146,
+      "sha256": "85321b9856afc3d0dcb6943dd90d1661540b61a712689bdb562d328f75c0aaf2",
+      "rows": null
+    }
+  }
+}
