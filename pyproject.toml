@@ -32,6 +32,10 @@ dependencies = [
     "joblib>=1.5.2",
     "shap>=0.46",
 
+    # API (ADR-017)
+    "fastapi>=0.115",
+    "uvicorn>=0.32",
+
     # Visualisation
     "matplotlib>=3.10.6",
     "seaborn>=0.13.2",
@@ -47,7 +51,7 @@ dev = [
 
 [tool.setuptools.packages.find]
 where = ["."]
-include = ["models*", "data_collection_pipeline*"]
+include = ["models*", "data_collection_pipeline*", "api*"]
 
 [tool.ruff]
 line-length = 100

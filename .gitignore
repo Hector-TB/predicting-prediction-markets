@@ -42,3 +42,6 @@ eda.ipynb
 
 # Pipeline run logs
 logs/
+
+# Model releases downloaded by the API (api/releases.py)
+.cache/

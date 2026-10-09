@@ -67,10 +67,10 @@ Warnings are stored with the prediction so the track record can be reported with
 ## Prediction path
 
 1. Resolve the input to one market: Gamma metadata and the CLOB token ID.
-2. Fetch the full CLOB price history (same call as `build_snapshots.fetch_price_history`).
-3. **Compute features as of now, with the training code.** Refactor the per-snapshot feature block of `build_snapshots.compute_snapshots` into a shared `features_at(market, price_df, ts)` used by both the pipeline and the API. Features computed separately at training and serving time would drift apart silently.
+2. Fetch the full CLOB price history (`features.fetch_price_history`, the call the build uses).
+3. **Compute features as of now, with the training code:** `features.features_at` (`data_collection_pipeline/features.py`), shared with the snapshot build; `scripts/check_feature_parity.py` proves it reproduces the training rows.
 4. Look up the category (cached per market; one Claude Haiku call via the `categorize_markets` prompt for unseen markets) and the latest Trends week.
-5. Run all six models (LR, XGBoost, RF, each with and without Trends) from the current `PRODUCTION` model release (ADR-019).
+5. Run every model of the current `PRODUCTION` model release (ADR-019): LR, XGBoost and RF in r1 (the Trends variants are parked). The headline model is the release's best by test AUC.
 6. Store the lookup (below) and return the result. Repeat lookups of the same market within a few hours reuse the stored snapshot.
 
 Target latency is ~1–2 s: two Polymarket calls, an optional LLM call and in-memory inference.

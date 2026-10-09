@@ -64,9 +64,12 @@ Build order:
 - DB migration: full feature vector + warnings on `snapshots`; resolution status on `markets`
 - [x] `/predict` endDate handling ✓ 2026-10-09 (ADR-025): always predict; no `endDate` → time features from the release's training medians (`no_end_date`), passed → 0 days left (`past_end_date`); full warning list in ADR-025 and the design doc. Measured: r1 on the v4 test set with median time features still out-ranks the price (ΔAUC +0.010 [+0.003, +0.015]) but its log-loss is worse than the market's
 - Still open from that item: check whether Polymarket edits `endDate` while a market is open (meta stores the final value, so training time features could see an end date not yet known; cf. ADR-018). Lookups store the `endDate` seen at the time, so comparing with the final value answers it
-- `features_at`: a minimum-price-count argument for serving (`few_prices`); release median fill values (`release.py candidate` from r2; a file for r1 in `models/releases/`)
+- [x] Serving support ✓ 2026-10-09: `features_at(..., min_obs=)` and no-end-date path (parity re-checked); median fill values in every new release manifest (`time_feature_fill`), r1's in `models/releases/r1_time_fill.json` (from v3's 2,038,895 train rows, file sha-checked)
 
 ### 6. FastAPI backend
+- [x] App skeleton ✓ 2026-10-09: `api/` (`uvicorn api.main:app`): `/health`, `/resolve` (URL / event / slug / condition ID / search), `/predict` (production release, ADR-025 fills + warnings, category via one Haiku call, cached per process). Release downloaded once into `.cache/releases/` (sha-checked); `$RELEASE` pins one. Offline tests in `tests/test_api.py` (`python3 -m pytest tests/`). Tried live: an ordinary market (~3 s), no end date, past end date, closed, unknown ID
+- [ ] Store every lookup (features, warnings, `endDate` as seen, every model's probability, release) — needs the snapshots migration (step 5); repeat lookups within a few hours reuse the stored one
+- [ ] Deploy: where the API runs (needs S3 + Anthropic keys, ~220 MB peak RAM with r1 loaded, measured 2026-10-09)
 - `GET /resolve?q=` — URL / slug / event / condition ID / name → market(s)
 - `/predict` always predicts and attaches ADR-025's warning codes (stored with each lookup)
 - `GET /predict?market_id=` — features as of now → the production release's models (LR, XGBoost, RF) + gap vs price, with warnings for out-of-distribution markets (non-binary rejected); stores every lookup with its release

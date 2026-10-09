@@ -51,11 +51,13 @@ DATA_DIR = ROOT / "data"
 RELEASES_DIR = ROOT / "models" / "releases"
 sys.path.insert(0, str(ROOT))
 sys.path.insert(0, str(DATA_DIR))
+sys.path.insert(0, str(ROOT / "data_collection_pipeline"))
 
 from models.common.evaluation import (  # noqa: E402
     bootstrap_auc_diff, bootstrap_loss_diff, compute_metrics,
 )
 from models.common.training import load_dataset, market_weights  # noqa: E402
+from features import TIME_FEATURES, time_feature_fill  # noqa: E402
 from sync import BUCKET, exists, git_info, make_client, sha256_file  # noqa: E402
 
 log = logging.getLogger(__name__)
@@ -277,6 +279,10 @@ def package(release: str, model_dirs: dict[str, Path], out: Path, **fields) -> d
         "test_set": {"rows": len(test), "markets": int(test["market_id"].nunique()),
                      "yes_rate": round(float(y.mean()), 4)},
         "market_baseline": {k: round(float(v), 5) for k, v in compute_metrics(y, market).items() if k != "n"},
+        # Time features for a market with no end date (ADR-025)
+        "time_feature_fill": time_feature_fill(pd.read_parquet(
+            DATA_DIR / "polymarket_ml_dataset_clean.parquet", columns=TIME_FEATURES,
+            filters=[("split", "==", "train")])),
         "models": {},
     }
     (out / "predictions").mkdir(parents=True, exist_ok=True)

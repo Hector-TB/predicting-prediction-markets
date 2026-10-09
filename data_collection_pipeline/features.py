@@ -37,11 +37,11 @@ class FetchError(Exception):
     opposed to the market genuinely having no history."""
 
 
-def fetch_price_history(clob_token_id: str) -> Optional[pd.DataFrame]:
+def fetch_price_history(clob_token_id: str, min_obs: int = MIN_PRICE_OBS) -> Optional[pd.DataFrame]:
     """
     Fetch full price history for a YES token from CLOB API.
     Returns DataFrame(timestamp, price) sorted ascending, or None if the market
-    has no (or too little) history. Raises FetchError if the request keeps
+    has fewer than `min_obs` prices. Raises FetchError if the request keeps
     failing, so a network blip is never mistaken for "no history".
     """
     for attempt in range(1, MAX_RETRIES + 1):
@@ -68,19 +68,23 @@ def fetch_price_history(clob_token_id: str) -> Optional[pd.DataFrame]:
     df["price"]     = pd.to_numeric(df["price"], errors="coerce")
     df = df.dropna(subset=["price"]).sort_values("timestamp").reset_index(drop=True)
 
-    return df if len(df) >= MIN_PRICE_OBS else None
+    return df if len(df) >= min_obs else None
 
 
 def raw_features(hist: pd.DataFrame, snap_ts: pd.Timestamp, start: pd.Timestamp,
-                 end: pd.Timestamp, duration_days: int) -> dict:
+                 end: Optional[pd.Timestamp], duration_days) -> dict:
     """Features at `snap_ts` from `hist`, the price history up to and including
-    `snap_ts` (at least MIN_PRICE_OBS rows). Rolling windows with fewer than two
-    prices are NaN; `finish_features` fills them."""
-    price_now         = float(hist["price"].values[-1])
-    days_before_close = (end - snap_ts).total_seconds() / 86400
-    pct_elapsed       = float(np.clip(
-        (snap_ts - start).total_seconds() / (end - start).total_seconds(), 0, 1
-    ))
+    `snap_ts` (at least MIN_PRICE_OBS rows in training). Rolling windows with fewer
+    than two prices are NaN; `finish_features` fills them. With no end date (serving
+    only, ADR-025) the time features are NaN for the caller to fill."""
+    price_now = float(hist["price"].values[-1])
+    if end is None:
+        days_before_close = pct_elapsed = np.nan
+    else:
+        days_before_close = (end - snap_ts).total_seconds() / 86400
+        pct_elapsed       = float(np.clip(
+            (snap_ts - start).total_seconds() / (end - start).total_seconds(), 0, 1
+        ))
 
     feat = {
         "days_before_close":         round(days_before_close, 2),
@@ -129,11 +133,25 @@ def finish_features(df: pd.DataFrame) -> pd.DataFrame:
 
 
 def features_at(price_df: pd.DataFrame, ts: pd.Timestamp, start: pd.Timestamp,
-                end: pd.Timestamp, duration_days: int) -> Optional[dict]:
+                end: Optional[pd.Timestamp], duration_days, min_obs: int = MIN_PRICE_OBS) -> Optional[dict]:
     """The finished feature row at `ts`, as training sees it, from prices up to
-    and including `ts`; None if there are fewer than MIN_PRICE_OBS of them."""
+    and including `ts`; None if there are fewer than `min_obs` of them (training's
+    MIN_PRICE_OBS by default; the API passes 1 and warns, ADR-025)."""
     hist = price_df[price_df["timestamp"] <= ts]
-    if len(hist) < MIN_PRICE_OBS:
+    if len(hist) < min_obs:
         return None
     df = finish_features(pd.DataFrame([raw_features(hist, ts, start, end, duration_days)]))
     return df.iloc[0].to_dict()
+
+
+# ─────────────────────────────────────────────
+# SERVING: TIME FEATURES WITHOUT AN END DATE (ADR-025)
+# ─────────────────────────────────────────────
+
+TIME_FEATURES = ["days_before_close", "pct_lifetime_elapsed", "duration_days"]
+
+
+def time_feature_fill(train: pd.DataFrame) -> dict:
+    """Medians of the time features over a release's training rows: the values a
+    market with no end date gets (ADR-025)."""
+    return {f: round(float(train[f].median()), 4) for f in TIME_FEATURES}

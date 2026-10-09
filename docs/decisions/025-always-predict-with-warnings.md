@@ -32,6 +32,7 @@ With the medians, the tree models still rank better than the price (ΔAUC +0.010
 2. **Missing inputs are filled for the models, never for the market.** The value fed to the models is stored with the lookup's feature vector, and the warning names it. The market's own fields keep Gamma's values (an absent `endDate` stays absent; ADR-023).
    - **No `endDate`** → `no_end_date`: the three time features are set to the medians of the release's training rows, stored with the release (a manifest field from r2 on; for r1, a file next to its record in `models/releases/`).
    - **`endDate` passed** → `past_end_date`: `days_before_close` = 0 and `pct_lifetime_elapsed` = 1, the closest values training saw.
+   - **End date not after the creation date** → treated as no end date (training drops these as `negative_duration`).
    - **Fewer than 20 price points** → `few_prices`: features from the points there are (`features_at` gets a minimum-count argument; training keeps 20). With no CLOB history at all, the price is Gamma's current price and the rolling features are filled as for an empty window (`finish_features`).
 3. **Warnings** (codes stored with every lookup; ADR-017 scores the track record with and without them):
 
@@ -45,6 +46,7 @@ With the medians, the tree models still rank better than the price (ΔAUC +0.010
    | `near_close` | < 30 days to scheduled end | no edge over the market measured this close (v3 re-score) |
    | `long_market` | scheduled duration > 365 days | no edge measured in markets over a year |
    | `outside_filters` | duration < 30 days or volume below the market filter | outside training's market filters (ADR-008) |
+   | `no_category` | the category call failed | the models get `other`, as for an unknown category in training |
 
    The design doc's "< 14 days to scheduled end" warning is replaced by `near_close`: ADR-022 removed the 14-day cutoff, so those rows are in training.
 
