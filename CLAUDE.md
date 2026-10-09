@@ -25,10 +25,10 @@ Dataset versions on S3 (ADR-016, manifests in `data/manifests/`): **v1** = the c
 - Model releases (ADR-019): **r1 = the v3 models, PRODUCTION** (`s3://…/models/r1/`, record in `models/releases/`). `python scripts/release.py status`. The local `models/*/artifacts/` are working copies; releases are the source of truth
 - Gates before any publish: `meta_checks.py` (in the pipeline), `scripts/coverage_check.py`, `scripts/check_snapshots.py`
 - Leftovers to delete when convenient (user said no rush): `data/polymarket_ml_dataset.v2.csv` (on S3 staging), `data/*.bak.csv`, `data/*_part[12]*.parquet`, `s3://…/staging/2026-09-27/` and `staging/2026-09-28-v3/`
-- Supabase (free tier): refreshed with v3 on 2026-09-29 (45,130 v3 markets with Gamma dates, 1,755 trends rows, model runs for v1 + v3). The 13 v1-only markets (dropped by ADR-023) were deleted, so `markets` matches v3 exactly. `db/load_parquet.py` only upserts: delete markets dropped from a new version by hand. Re-check tables after any unpause before assuming data loss
+- Supabase (free tier; pauses when idle — the hostname stops resolving): migrations 005 + 006 applied 2026-10-09, RLS on for all tables (the API connects as owner); live lookups go to `snapshots` / `predictions`, looked-up markets have `split` NULL and `resolution_status` set. Refreshed with v3 on 2026-09-29 (45,130 v3 markets with Gamma dates, 1,755 trends rows, model runs for v1 + v3). The 13 v1-only markets (dropped by ADR-023) were deleted, so `markets` matches v3 exactly. `db/load_parquet.py` only upserts: delete markets dropped from a new version by hand. Re-check tables after any unpause before assuming data loss
 - S3 bucket versioning on; `pipeline-leakage-and-categories` merged to `main` (PR #1, 2026-09-29)
 - Machine: 8 GB RAM, 2 physical cores; VS Code runs from a translocated path (move it to Applications). Background jobs started from Claude die if VS Code quits
-- API skeleton in `api/` (`python3 -m uvicorn api.main:app --reload`; tests `python3 -m pytest tests/`): `/resolve`, `/predict` with ADR-025 warnings; every lookup is stored (`api/store.py`) once migrations 005 + 006 are applied to Supabase (paused as of 2026-10-09; unpause first). No frontend yet
+- API skeleton in `api/` (`python3 -m uvicorn api.main:app --reload`; tests `python3 -m pytest tests/`): `/resolve`, `/predict` with ADR-025 warnings; every lookup is stored in Supabase (`api/store.py`; migrations 005 + 006 applied 2026-10-09). No frontend yet
 
 ## Next session — start here (in order)
 
