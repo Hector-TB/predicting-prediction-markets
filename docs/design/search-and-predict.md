@@ -44,16 +44,22 @@ A public portfolio site where anyone can look up an open Polymarket market and s
 | `0x…` condition ID | `GET /markets?condition_ids=<id>&closed=…` |
 | Free text | `GET /public-search?q=…`, then pick a result |
 
-## Eligibility (ADR-017)
+## Eligibility (ADR-017, ADR-025)
+
+Every open binary market gets a prediction; anything training never saw is flagged. Missing inputs are filled only for the models (stored with the lookup), never as market facts.
 
 | Condition | Why it matters | Behaviour |
 |---|---|---|
 | Not binary | Models only predict YES/NO | **Reject** with explanation |
 | Already closed | Nothing to predict | Reject; link to the outcome |
-| Age < 14 days | Rolling features lack history (ADR-002 burn-in) | Predict + warning |
-| < 14 days to scheduled end | Outside training window (ADR-002 cutoff) | Predict + warning |
-| Price ≥ 0.95 or ≤ 0.05 | Such rows were removed from training (ADR-014) | Predict + warning |
-| Scheduled duration < 30 days, volume < $1k | Outside market filters (ADR-008) | Predict + warning |
+| No `endDate` | Time features need one | Predict with the release's training medians + `no_end_date` |
+| `endDate` passed, still open | Training never saw a row after the end | Predict with 0 days left + `past_end_date` |
+| < 20 price points | Below training's minimum | Predict from the points there are + `few_prices` |
+| Age < 14 days | Rolling features lack history (ADR-002 burn-in) | Predict + `young_market` |
+| Price ≥ 0.95 or ≤ 0.05 | Such rows were removed from training (ADR-014) | Predict + `settled_price` |
+| < 30 days to scheduled end | No edge over the market measured this close (v3 re-score) | Predict + `near_close` |
+| Scheduled duration > 365 days | No edge measured in markets over a year | Predict + `long_market` |
+| Scheduled duration < 30 days, volume below the filter | Outside market filters (ADR-008) | Predict + `outside_filters` |
 | No current Google Trends week for the category | Trends features stale | Predict + warning on the Trends models |
 
 Warnings are stored with the prediction so the track record can be reported with and without warned predictions.

@@ -119,3 +119,4 @@ Dataset versions on S3 (ADR-016, manifests in `data/manifests/`): **v1** = the c
 - ADR-022: no 14-day pre-close cutoff from v3 (price rule only); full snapshot rebuild with retries + settings guard
 - ADR-023: meta must match Gamma — no estimated/placeholder values; fresh fetch wins on merge (category/split kept); `meta_checks.py` blocks pipeline/build/publish; repair with `scripts/refresh_meta.py`
 - ADR-024: one training protocol for all models — time-ordered holdout, one weight per market, calibration + threshold from the holdout (supersedes ADR-021 decisions 2–3)
+- ADR-025: always predict an open binary market; missing/odd inputs filled for the models only (no endDate → training medians, past endDate → 0 days left) and flagged with warning codes

@@ -62,15 +62,16 @@ Build order:
 - ~~Decide and apply ADR-018~~ ✓ `log_volume` dropped (ADR-021)
 - [x] Shared feature code ✓ 2026-10-09: `data_collection_pipeline/features.py` (CLOB fetch, `raw_features`, `finish_features`, `features_at` for the API); `build_snapshots.py` and `fix_dataset.py` use it. `scripts/check_feature_parity.py` re-fetches sampled markets and recomputes every stored snapshot: 250 v4 markets / 22,808 rows, all 19 model features identical (a 12 h timestamp shift fails it). Re-run it after any feature change
 - DB migration: full feature vector + warnings on `snapshots`; resolution status on `markets`
-- Decide how `/predict` handles open markets with no `endDate` (11 of 500 sampled on 2026-10-01, e.g. the 2026 Senate-seat markets) or an `endDate` already passed (39 of 500): the time features need one. Training drops these (`fetch_markets.py`, `bad_dates`). Also check whether Polymarket edits `endDate` while a market is open: meta stores the final value, so time features could see an end date that wasn't known yet at snapshot time (cf. ADR-018)
+- [x] `/predict` endDate handling ✓ 2026-10-09 (ADR-025): always predict; no `endDate` → time features from the release's training medians (`no_end_date`), passed → 0 days left (`past_end_date`); full warning list in ADR-025 and the design doc. Measured: r1 on the v4 test set with median time features still out-ranks the price (ΔAUC +0.010 [+0.003, +0.015]) but its log-loss is worse than the market's
+- Still open from that item: check whether Polymarket edits `endDate` while a market is open (meta stores the final value, so training time features could see an end date not yet known; cf. ADR-018). Lookups store the `endDate` seen at the time, so comparing with the final value answers it
+- `features_at`: a minimum-price-count argument for serving (`few_prices`); release median fill values (`release.py candidate` from r2; a file for r1 in `models/releases/`)
 
 ### 6. FastAPI backend
 - `GET /resolve?q=` — URL / slug / event / condition ID / name → market(s)
-- `/predict` warnings must cover rows training never saw: price ≥ 0.95 or ≤ 0.05 (fix_leakage drops these as settled), fewer than 14 days since `startDate` (burn-in), fewer than 20 price points (`features_at` returns None)
+- `/predict` always predicts and attaches ADR-025's warning codes (stored with each lookup)
 - `GET /predict?market_id=` — features as of now → the production release's models (LR, XGBoost, RF) + gap vs price, with warnings for out-of-distribution markets (non-binary rejected); stores every lookup with its release
 - `GET /track-record` — backtest metrics + live metrics over resolved lookups, per release
 - Daily resolution job: record outcomes of looked-up markets (ADR-004 rule)
-- The models only beat the market ≥ 30 days before close (re-score). Label predictions closer to close as "no expected edge", or de-emphasise them
 
 ---
 
@@ -82,6 +83,8 @@ Search → market detail page (the production models + gap, prediction history, 
 ---
 
 ## Parked — to do, not yet scheduled
+
+- **Time-free fallback models for `no_end_date` lookups** (ADR-025 alternative): models trained without the three time features. Only if the live track record shows the median fill hurts; ~2% of lookups.
 
 - **Run refreshes on a cloud machine.** A refresh takes ~2 h and dies if the laptop sleeps or VS Code quits. An EC2 instance in the bucket's region (or another scheduled runner) could run `refresh.py` unattended, e.g. weekly. Needs: credentials, the data pulled on the machine, the log folder synced back. Suggested 2026-09-30.
 - **Walk-forward backtest.** Train at each quarterly cutoff from 2025 Q1, predict the next quarter, and pool the results. It shows:
