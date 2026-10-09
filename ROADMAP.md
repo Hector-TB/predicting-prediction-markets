@@ -83,7 +83,11 @@ Build order:
 ## Later — frontend
 
 ### 7. React frontend (public portfolio site)
-Search → market detail page (the production models + gap, prediction history, outcome), recent predictions feed (live track record), model pages (importance, calibration, backtest vs live), track-record comparison, research page. Blocked on: API.
+Search → market detail page (the production models + gap, prediction history, outcome), recent predictions feed (live track record), model pages (importance, calibration, backtest vs live), track-record comparison, research page.
+- [x] First pages ✓ 2026-10-09 (`web/`, Vite + React + TS; run instructions in `web/README.md`): search (`/?q=`, URL / slug / text via `/resolve`) and market page (`/market/:id`: market price, headline model, gap, ADR-025 caveats, price chart with the model's estimate, all models, model inputs, stored-lookup note, "Predict again"). Checked in light and dark, desktop and phone width
+- [ ] Market page history: earlier lookups of the market and, once resolved, the outcome — needs `GET /markets/{id}` (design doc)
+- [ ] Recent-lookups feed + track-record page (`GET /lookups`, `GET /track-record`); model pages (`GET /models/{name}`)
+- [ ] A page view stores a lookup: decide reuse vs new lookup on the server (with the storage-limit item in step 6) before going public
 
 ---
 
