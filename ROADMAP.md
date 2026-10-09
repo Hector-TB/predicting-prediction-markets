@@ -52,7 +52,7 @@ Build order:
 - [ ] stages 6–8 (train, release, report) + promotion checks; migration 005 (`model_runs.release`) — code written 2026-09-30 (`release.py candidate | report | promote | reject | rollback | sync-db`, `scripts/release_report.py`; choices in ADR-019's *Implementation choices*). Dry run on v3 passed 2026-09-30 (r1 packaged as a pretend r2: artifacts reproduce, zero differences, verdict PASS; the report takes ~6 min at 200 resamples). Still to do: apply migration 005 to Supabase, then `release.py sync-db r1`
 - [ ] Incremental build retries every parent market without rows (5,542 on v3 → 6,311 attempts for 769 new markets, ~30 min). Harmless (none gained rows on the first refresh; the parent gate would catch one), but it should build only markets not in the parent's meta
 - [ ] The DB loader only upserts: prune markets dropped from a new dataset version (the 13 ADR-023 drops were deleted by hand)
-- [ ] First real run: v4 (the 737+ new markets) → candidate `r2`
+- [ ] First real run: v4 (769 new markets) → candidate `r2`. 2026-10-02: stages 0–5 done, **v4 published** (cutoff T = 2026-07-02 15:09 UTC; all four gates passed); stage 6 trained LR and XGBoost, then RF died mid-fit (run `logs/refresh_20260930_014318`). **Paused 2026-10-09** to build the API/site first (r1 stays production; the API serves whichever release is production). Finish with `caffeinate -i python3 scripts/refresh.py --resume` (~25 min: RF, candidate `r2`, report), then promote/reject
 
 ---
 
