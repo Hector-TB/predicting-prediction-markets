@@ -61,14 +61,16 @@ Build order:
 ### 5. Prerequisites
 - ~~Decide and apply ADR-018~~ ✓ `log_volume` dropped (ADR-021)
 - [x] Shared feature code ✓ 2026-10-09: `data_collection_pipeline/features.py` (CLOB fetch, `raw_features`, `finish_features`, `features_at` for the API); `build_snapshots.py` and `fix_dataset.py` use it. `scripts/check_feature_parity.py` re-fetches sampled markets and recomputes every stored snapshot: 250 v4 markets / 22,808 rows, all 19 model features identical (a 12 h timestamp shift fails it). Re-run it after any feature change
-- DB migration: full feature vector + warnings on `snapshots`; resolution status on `markets`
+- [x] DB migration written: `db/migrations/006_live_lookups.sql` (features + warnings on `snapshots`, resolution status on `markets`); applying it is under step 6
 - [x] `/predict` endDate handling ✓ 2026-10-09 (ADR-025): always predict; no `endDate` → time features from the release's training medians (`no_end_date`), passed → 0 days left (`past_end_date`); full warning list in ADR-025 and the design doc. Measured: r1 on the v4 test set with median time features still out-ranks the price (ΔAUC +0.010 [+0.003, +0.015]) but its log-loss is worse than the market's
 - Still open from that item: check whether Polymarket edits `endDate` while a market is open (meta stores the final value, so training time features could see an end date not yet known; cf. ADR-018). Lookups store the `endDate` seen at the time, so comparing with the final value answers it
 - [x] Serving support ✓ 2026-10-09: `features_at(..., min_obs=)` and no-end-date path (parity re-checked); median fill values in every new release manifest (`time_feature_fill`), r1's in `models/releases/r1_time_fill.json` (from v3's 2,038,895 train rows, file sha-checked)
 
 ### 6. FastAPI backend
 - [x] App skeleton ✓ 2026-10-09: `api/` (`uvicorn api.main:app`): `/health`, `/resolve` (URL / event / slug / condition ID / search), `/predict` (production release, ADR-025 fills + warnings, category via one Haiku call, cached per process). Release downloaded once into `.cache/releases/` (sha-checked); `$RELEASE` pins one. Offline tests in `tests/test_api.py` (`python3 -m pytest tests/`). Tried live: an ordinary market (~3 s), no end date, past end date, closed, unknown ID
-- [ ] Store every lookup (features, warnings, `endDate` as seen, every model's probability, release) — needs the snapshots migration (step 5); repeat lookups within a few hours reuse the stored one
+- [x] Store every lookup — code ✓ 2026-10-09 (`api/store.py`, migration `006_live_lookups.sql`): market upserted as `open` (dataset markets untouched), snapshot with full features / warnings / Gamma price / `endDate` as seen / release, one prediction per model linked to the release's `model_runs`. If the DB is down the prediction is still returned with `"stored": false` and the miss is logged. Tested end to end on a throwaway Postgres (PGlite) with migrations 001–006
+- [ ] **Apply to Supabase** (project paused on 2026-10-09: hostname NXDOMAIN): unpause → re-check tables → apply 005 + 006 (006 also turns on RLS for all five tables) → `python scripts/release.py sync-db r1`
+- [ ] Limit lookup storage before going public (rate limit per IP, or reuse a lookup of the same market within a few hours): the free tier has 500 MB
 - [ ] Deploy: where the API runs (needs S3 + Anthropic keys, ~220 MB peak RAM with r1 loaded, measured 2026-10-09)
 - `GET /resolve?q=` — URL / slug / event / condition ID / name → market(s)
 - `/predict` always predicts and attaches ADR-025's warning codes (stored with each lookup)

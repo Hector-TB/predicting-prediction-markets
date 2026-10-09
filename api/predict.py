@@ -166,7 +166,8 @@ def build_features(market: Market, price_df: Optional[pd.DataFrame], now: pd.Tim
     return feats, codes
 
 
-def predict(market_id: str, release: ServingRelease, now: Optional[pd.Timestamp] = None) -> dict:
+def predict(market_id: str, release: ServingRelease,
+            now: Optional[pd.Timestamp] = None) -> tuple[dict, Market]:
     raw = gamma.market_by_condition_id(market_id)
     if raw is None:
         raise PredictError("not_found", f"No Polymarket market with condition ID {market_id}.")
@@ -206,4 +207,4 @@ def predict(market_id: str, release: ServingRelease, now: Optional[pd.Timestamp]
         "features": {k: v if isinstance(v, str) else (None if np.isnan(v) else float(v))
                      for k, v in feats.items()},
         "price_history": history,
-    }
+    }, market

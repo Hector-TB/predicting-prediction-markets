@@ -28,7 +28,7 @@ Dataset versions on S3 (ADR-016, manifests in `data/manifests/`): **v1** = the c
 - Supabase (free tier): refreshed with v3 on 2026-09-29 (45,130 v3 markets with Gamma dates, 1,755 trends rows, model runs for v1 + v3). The 13 v1-only markets (dropped by ADR-023) were deleted, so `markets` matches v3 exactly. `db/load_parquet.py` only upserts: delete markets dropped from a new version by hand. Re-check tables after any unpause before assuming data loss
 - S3 bucket versioning on; `pipeline-leakage-and-categories` merged to `main` (PR #1, 2026-09-29)
 - Machine: 8 GB RAM, 2 physical cores; VS Code runs from a translocated path (move it to Applications). Background jobs started from Claude die if VS Code quits
-- API skeleton in `api/` (`python3 -m uvicorn api.main:app --reload`; tests `python3 -m pytest tests/`): `/resolve`, `/predict` with ADR-025 warnings; lookups not stored yet. No frontend yet
+- API skeleton in `api/` (`python3 -m uvicorn api.main:app --reload`; tests `python3 -m pytest tests/`): `/resolve`, `/predict` with ADR-025 warnings; every lookup is stored (`api/store.py`) once migrations 005 + 006 are applied to Supabase (paused as of 2026-10-09; unpause first). No frontend yet
 
 ## Next session — start here (in order)
 

@@ -7,8 +7,9 @@ FastAPI app (ADR-017)
     GET /resolve?q=             URL / slug / condition ID / text → markets
     GET /predict?market_id=     every production model's P(YES) as of now, with warnings (ADR-025)
 
-The release is the S3 PRODUCTION pointer unless $RELEASE names one. Lookups are
-not stored yet (needs the snapshots migration; ROADMAP step 5).
+The release is the S3 PRODUCTION pointer unless $RELEASE names one. Every
+prediction is stored (api/store.py, migrations 005 + 006); if the database is
+unreachable the prediction is still returned, with "stored": false.
 """
 
 import logging
@@ -21,7 +22,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
 from api import ROOT, gamma
-from api import releases
+from api import releases, store
 from api.predict import PredictError, predict
 from features import FetchError
 
@@ -70,9 +71,16 @@ def resolve(q: str = Query(..., min_length=1, max_length=500)):
 @app.get("/predict")
 def predict_market(market_id: str = Query(..., pattern=gamma.CONDITION_ID.pattern)):
     try:
-        return predict(market_id, app.state.release)
+        result, market = predict(market_id, app.state.release)
     except PredictError as e:
         return error(ERROR_STATUS.get(e.code, 400), e.code, str(e))
     except (gamma.GammaError, FetchError) as e:
         log.warning("predict %s: %s", market_id, e)
         return error(502, "upstream", "Polymarket could not be reached.")
+    try:
+        result["lookup_id"] = store.save_lookup(result, market, app.state.release)
+        result["stored"] = True
+    except Exception as e:   # the user still gets the prediction; the gap is logged
+        log.error("lookup of %s NOT stored: %s", market_id, e)
+        result["stored"] = False
+    return result
