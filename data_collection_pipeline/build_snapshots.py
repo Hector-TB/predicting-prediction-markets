@@ -19,16 +19,15 @@ Run fetch_markets.py first.
 import argparse
 import json
 import logging
-import requests
 import pandas as pd
 import numpy as np
 import time
-import os
 import sys
 from datetime import timedelta
 from pathlib import Path
 from concurrent.futures import ProcessPoolExecutor
 
+from features import MIN_PRICE_OBS, ROLLING_WINDOWS, FetchError, fetch_price_history, raw_features
 from meta_checks import assert_meta_ok
 from typing import Optional
 
@@ -43,18 +42,16 @@ DATA_DIR = ROOT / "data"
 # CONFIG
 # ─────────────────────────────────────────────
 
-CLOB_URL            = "https://clob.polymarket.com"
-
-MIN_PRICE_OBS       = 20        # minimum price observations to use a market
 SNAPSHOT_INTERVAL_H = 12        # hours between snapshots
 MIN_HISTORY_DAYS    = 14        # burn-in before first snapshot
 CUTOFF_BEFORE_CLOSE = 0         # days before endDate to stop snapshots (was 14; ADR-022)
-ROLLING_WINDOWS     = [7, 14]   # rolling feature windows in days
 
 SLEEP_BETWEEN_CALLS = 0.15
 WORKERS             = 4         # processes; 2 physical cores here, fetch waits overlap
-MAX_RETRIES         = 5
-RETRY_BACKOFF       = 5         # seconds before first retry (doubles each attempt)
+
+# Column order of the CSV (a resumed build appends without a header)
+TIME_PRICE_COLUMNS  = ["days_before_close", "pct_lifetime_elapsed", "duration_days",
+                       "price_at_snapshot", "price_deviation_from_half"]
 
 INPUT_META          = DATA_DIR / "polymarket_markets_meta.csv"
 OUTPUT_DATASET      = DATA_DIR / "polymarket_ml_dataset.csv"
@@ -73,49 +70,6 @@ SETTINGS = {
 log = logging.getLogger(__name__)
 
 
-class FetchError(Exception):
-    """The price history could not be fetched (network / server error), as
-    opposed to the market genuinely having no history."""
-
-
-# ─────────────────────────────────────────────
-# FETCH PRICE HISTORY
-# ─────────────────────────────────────────────
-
-def fetch_price_history(clob_token_id: str) -> Optional[pd.DataFrame]:
-    """
-    Fetch full price history for a YES token from CLOB API.
-    Returns DataFrame(timestamp, price) sorted ascending, or None if the market
-    has no (or too little) history. Raises FetchError if the request keeps
-    failing, so a network blip is never mistaken for "no history".
-    """
-    for attempt in range(1, MAX_RETRIES + 1):
-        try:
-            r = requests.get(
-                f"{CLOB_URL}/prices-history",
-                params={"market": clob_token_id, "interval": "max", "fidelity": 720},
-                timeout=20,
-            )
-            r.raise_for_status()
-            history = r.json().get("history", [])
-            break
-        except Exception as e:
-            if attempt == MAX_RETRIES:
-                raise FetchError(str(e)) from e
-            time.sleep(RETRY_BACKOFF * 2 ** (attempt - 1))
-
-    if not history:
-        return None
-
-    df = pd.DataFrame(history)
-    df = df.rename(columns={"t": "timestamp", "p": "price"})
-    df["timestamp"] = pd.to_datetime(df["timestamp"], unit="s", utc=True)
-    df["price"]     = pd.to_numeric(df["price"], errors="coerce")
-    df = df.dropna(subset=["price"]).sort_values("timestamp").reset_index(drop=True)
-
-    return df if len(df) >= MIN_PRICE_OBS else None
-
-
 # ─────────────────────────────────────────────
 # COMPUTE SNAPSHOTS
 # ─────────────────────────────────────────────
@@ -132,7 +86,7 @@ def compute_snapshots(market: pd.Series, price_df: pd.DataFrame,
                    and no later than closed_time when known: fix_leakage.py drops
                    post-close rows anyway, so don't build them
 
-    All features use price history strictly BEFORE each snapshot timestamp.
+    All features use price history up to each snapshot timestamp (features.py).
     """
     start    = market["start_date"]
     end      = market["end_date"]
@@ -161,44 +115,16 @@ def compute_snapshots(market: pd.Series, price_df: pd.DataFrame,
         if len(hist) < MIN_PRICE_OBS:
             continue
 
-        price_now         = float(hist["price"].values[-1])
-        days_before_close = (end - snap_ts).total_seconds() / 86400
-        pct_elapsed       = float(np.clip(
-            (snap_ts - start).total_seconds() / (end - start).total_seconds(), 0, 1
-        ))
-
+        raw  = raw_features(hist, snap_ts, start, end, duration)
         feat = {
-            "market_id":                 market["market_id"],
-            "snapshot_timestamp":        snap_ts,
-            "days_before_close":         round(days_before_close, 2),
-            "pct_lifetime_elapsed":      round(pct_elapsed, 4),
-            "duration_days":             duration,
-            "price_at_snapshot":         round(price_now, 4),
-            "price_deviation_from_half": round(abs(price_now - 0.5), 4),
-            "total_volume":              market["total_volume"],
-            "log_volume":                round(float(np.log1p(market["total_volume"])), 4),
-            "outcome":                   outcome,
+            "market_id":          market["market_id"],
+            "snapshot_timestamp": snap_ts,
+            **{k: raw[k] for k in TIME_PRICE_COLUMNS},
+            "total_volume":       market["total_volume"],
+            "log_volume":         round(float(np.log1p(market["total_volume"])), 4),
+            "outcome":            outcome,
+            **{k: v for k, v in raw.items() if k not in TIME_PRICE_COLUMNS},
         }
-
-        for window_days in ROLLING_WINDOWS:
-            label        = f"{window_days}d"
-            window_start = snap_ts - timedelta(days=window_days)
-            w_prices     = hist[hist["timestamp"] >= window_start]["price"].values
-
-            if len(w_prices) >= 2:
-                x     = np.arange(len(w_prices), dtype=float)
-                slope = float(np.polyfit(x, w_prices, 1)[0]) if x.std() > 0 else 0.0
-                feat[f"price_mean_{label}"]       = round(float(np.mean(w_prices)), 4)
-                feat[f"price_volatility_{label}"] = round(float(np.std(w_prices)), 4)
-                feat[f"price_min_{label}"]        = round(float(np.min(w_prices)), 4)
-                feat[f"price_max_{label}"]        = round(float(np.max(w_prices)), 4)
-                feat[f"price_change_{label}"]     = round(float(w_prices[-1] - w_prices[0]), 4)
-                feat[f"price_range_{label}"]      = round(float(np.max(w_prices) - np.min(w_prices)), 4)
-                feat[f"price_trend_{label}"]      = round(slope, 6)
-            else:
-                for s in ["mean", "volatility", "min", "max", "change", "range", "trend"]:
-                    feat[f"price_{s}_{label}"] = np.nan
-
         rows.append(feat)
 
     return pd.DataFrame(rows) if rows else None

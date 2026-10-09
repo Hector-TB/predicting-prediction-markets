@@ -24,6 +24,7 @@ import sys
 import pandas as pd
 from pathlib import Path
 
+from features import ROLLING_FILL_PRICE, ROLLING_FILL_ZERO, ROLLING_WINDOWS, finish_features
 from stream_parquet import BATCH_ROWS, FrameWriter, iter_frames
 
 log = logging.getLogger(__name__)
@@ -35,9 +36,7 @@ META_CSV    = DATA_DIR / "polymarket_markets_meta.csv"
 DATASET_CSV = DATA_DIR / "polymarket_ml_dataset.csv"
 SEP         = "=" * 60
 
-ROLLING_FILL_PRICE = ["price_mean", "price_min", "price_max"]
-ROLLING_FILL_ZERO  = ["price_volatility", "price_change", "price_range", "price_trend"]
-WINDOWS            = ["7d", "14d"]
+WINDOWS            = [f"{w}d" for w in ROLLING_WINDOWS]
 TEXT_COLUMNS       = ["market_id", "split", "category", "question"]
 
 
@@ -57,23 +56,12 @@ def fix_meta(meta: pd.DataFrame) -> pd.DataFrame:
 
 def fix_chunk(df: pd.DataFrame) -> tuple[pd.DataFrame, dict]:
     """Fixes 2 and 3 on one chunk of CSV rows. Returns (df, counts)."""
-    counts = {}
-
-    # ── Fix 2: clip prices ──────────────────────────────
-    counts["clipped"] = int(((df["price_at_snapshot"] < 0) | (df["price_at_snapshot"] > 1)).sum())
-    df["price_at_snapshot"] = df["price_at_snapshot"].clip(0.0, 1.0)
-    df["price_deviation_from_half"] = (df["price_at_snapshot"] - 0.5).abs().round(4)
-
-    # ── Fix 3: fill NaN rolling features ───────────────
+    counts = {"clipped": int(((df["price_at_snapshot"] < 0) | (df["price_at_snapshot"] > 1)).sum())}
     for w in WINDOWS:
-        nan_mask = df[f"price_mean_{w}"].isna()
-        counts[f"filled_{w}"] = int(nan_mask.sum())
+        counts[f"filled_{w}"] = int(df[f"price_mean_{w}"].isna().sum())
 
-        for feat in ROLLING_FILL_PRICE:
-            df.loc[nan_mask, f"{feat}_{w}"] = df.loc[nan_mask, "price_at_snapshot"].round(4)
-        for feat in ROLLING_FILL_ZERO:
-            df.loc[nan_mask, f"{feat}_{w}"] = 0.0
-
+    # Fixes 2 and 3 are shared with the API (features.py)
+    df = finish_features(df)
     return df, counts
 
 

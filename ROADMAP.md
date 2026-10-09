@@ -60,12 +60,13 @@ Build order:
 
 ### 5. Prerequisites
 - ~~Decide and apply ADR-018~~ ✓ `log_volume` dropped (ADR-021)
-- Refactor the per-snapshot feature code in `build_snapshots.py` into a shared function used by training and the API; test it reproduces training snapshots exactly
+- [x] Shared feature code ✓ 2026-10-09: `data_collection_pipeline/features.py` (CLOB fetch, `raw_features`, `finish_features`, `features_at` for the API); `build_snapshots.py` and `fix_dataset.py` use it. `scripts/check_feature_parity.py` re-fetches sampled markets and recomputes every stored snapshot: 250 v4 markets / 22,808 rows, all 19 model features identical (a 12 h timestamp shift fails it). Re-run it after any feature change
 - DB migration: full feature vector + warnings on `snapshots`; resolution status on `markets`
 - Decide how `/predict` handles open markets with no `endDate` (11 of 500 sampled on 2026-10-01, e.g. the 2026 Senate-seat markets) or an `endDate` already passed (39 of 500): the time features need one. Training drops these (`fetch_markets.py`, `bad_dates`). Also check whether Polymarket edits `endDate` while a market is open: meta stores the final value, so time features could see an end date that wasn't known yet at snapshot time (cf. ADR-018)
 
 ### 6. FastAPI backend
 - `GET /resolve?q=` — URL / slug / event / condition ID / name → market(s)
+- `/predict` warnings must cover rows training never saw: price ≥ 0.95 or ≤ 0.05 (fix_leakage drops these as settled), fewer than 14 days since `startDate` (burn-in), fewer than 20 price points (`features_at` returns None)
 - `GET /predict?market_id=` — features as of now → the production release's models (LR, XGBoost, RF) + gap vs price, with warnings for out-of-distribution markets (non-binary rejected); stores every lookup with its release
 - `GET /track-record` — backtest metrics + live metrics over resolved lookups, per release
 - Daily resolution job: record outcomes of looked-up markets (ADR-004 rule)
