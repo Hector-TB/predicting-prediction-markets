@@ -87,6 +87,7 @@ Search → market detail page (the production models + gap, prediction history, 
 - [x] First pages ✓ 2026-10-09 (`web/`, Vite + React + TS; run instructions in `web/README.md`): search (`/?q=`, URL / slug / text via `/resolve`) and market page (`/market/:id`: market price, headline model, gap, ADR-025 caveats, price chart with the model's estimate, all models, model inputs, stored-lookup note, "Predict again"). Checked in light and dark, desktop and phone width
 - [ ] Market page history: earlier lookups of the market and, once resolved, the outcome — needs `GET /markets/{id}` (design doc)
 - [ ] Recent-lookups feed + track-record page (`GET /lookups`, `GET /track-record`); model pages (`GET /models/{name}`)
+- [ ] **"Does a gap like this pay off?"** on the market page (asked 2026-10-09 about a +7.7 pt gap): from the backtest test set, bin snapshots by the model–market gap (and days to close), show each bin's realised YES rate vs price and the return of buying the cheaper side at the recorded price (ADR-015: NO costs 1 − p), with market-level CIs; later the same from the live track record. Needs the bins computed per release (manifest or a small table) and an API field
 - [ ] A page view stores a lookup: decide reuse vs new lookup on the server (with the storage-limit item in step 6) before going public
 
 ---
