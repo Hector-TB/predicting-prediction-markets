@@ -22,9 +22,17 @@ Usage:
     python data/sync.py pull --version v1           # download a specific version
     python data/sync.py publish v2 --parent v1 --notes "…"   # upload local data as a NEW version
     python data/sync.py freeze-legacy v1 --notes "…"         # one-time: adopt the old flat data/ prefix
+    python data/sync.py evidence push               # back up data/fetch_cache/ (ADR-023 evidence)
+    python data/sync.py evidence pull               # restore it, e.g. on a new machine
 
 publish refuses to overwrite an existing version; pull refuses to overwrite
 local files that differ from the target version unless --force is given.
+
+The Gamma records that meta_checks.py verifies the meta against (data/fetch_cache/,
+ADR-023) are not part of any version: they accumulate across fetches. `evidence`
+mirrors them to s3://<bucket>/evidence/fetch_cache/ (bucket versioning keeps
+replaced copies); publish pushes them first, so every published meta has its
+evidence on S3.
 """
 
 import argparse
@@ -59,6 +67,8 @@ BUCKET          = os.getenv("S3_BUCKET")
 REGION          = os.getenv("AWS_REGION", "us-east-1")
 LEGACY_PREFIX   = os.getenv("S3_DATA_PREFIX", "data")          # pre-ADR-016 flat layout
 DATASETS_PREFIX = os.getenv("S3_DATASETS_PREFIX", "datasets")
+EVIDENCE_PREFIX = "evidence/fetch_cache"
+FETCH_CACHE_DIR = DATA_DIR / "fetch_cache"
 
 META_FILE  = "polymarket_markets_meta.csv"
 CLEAN_FILE = "polymarket_ml_dataset_clean.parquet"
@@ -273,6 +283,8 @@ def cmd_publish(s3, args) -> None:
     sys.path.insert(0, str(ROOT / "data_collection_pipeline"))
     from meta_checks import assert_meta_ok
     assert_meta_ok(pd.read_csv(DATA_DIR / META_FILE, dtype={"clob_token_id": str}))
+    if not args.dry_run:
+        push_evidence(s3)   # the records that meta was just verified against
 
     log.info("Building manifest for %s ...", version)
     manifest = {
@@ -340,6 +352,49 @@ def cmd_pull(s3, args) -> None:
         log.info("Local data is now %s.", version)
 
 
+def s3_evidence(s3) -> dict:
+    """{file name: size} of the evidence files on S3."""
+    pages = s3.get_paginator("list_objects_v2").paginate(Bucket=BUCKET, Prefix=f"{EVIDENCE_PREFIX}/")
+    return {o["Key"].rsplit("/", 1)[1]: o["Size"] for pg in pages for o in pg.get("Contents", [])}
+
+
+def evidence_diff(s3) -> tuple[list[str], list[str], list[str]]:
+    """(only local, only on S3, on both but different) — compared by SHA-256."""
+    local = {p.name: p for p in sorted(FETCH_CACHE_DIR.glob("*")) if p.is_file()}
+    remote = s3_evidence(s3)
+    differ = [f for f in sorted(local.keys() & remote.keys())
+              if local[f].stat().st_size != remote[f]
+              or sha256_file(local[f]) != sha256_s3(s3, f"{EVIDENCE_PREFIX}/{f}")]
+    return sorted(local.keys() - remote.keys()), sorted(remote.keys() - local.keys()), differ
+
+
+def push_evidence(s3, dry_run: bool = False) -> None:
+    only_local, _, differ = evidence_diff(s3)
+    for f in only_local + differ:
+        log.info("  %s evidence %s", "would upload" if dry_run else "upload", f)
+        if not dry_run:
+            s3.upload_file(str(FETCH_CACHE_DIR / f), BUCKET, f"{EVIDENCE_PREFIX}/{f}")
+    log.info("Evidence on S3 is up to date (%d uploaded).", 0 if dry_run else len(only_local + differ))
+
+
+def cmd_evidence(s3, args) -> None:
+    if args.direction == "push":
+        push_evidence(s3, args.dry_run)
+        return
+    _, only_remote, differ = evidence_diff(s3)
+    if differ and not args.force:
+        log.error("These local evidence files differ from S3 and would be overwritten:")
+        for f in differ:
+            log.error("  %s", f)
+        sys.exit("Refusing to overwrite. Push them first (`evidence push`), or re-run with --force.")
+    FETCH_CACHE_DIR.mkdir(exist_ok=True)
+    for f in only_remote + differ:
+        log.info("  %s evidence %s", "would download" if args.dry_run else "download", f)
+        if not args.dry_run:
+            s3.download_file(BUCKET, f"{EVIDENCE_PREFIX}/{f}", str(FETCH_CACHE_DIR / f))
+    log.info("data/fetch_cache/ has all evidence from S3.")
+
+
 def cmd_freeze_legacy(s3, args) -> None:
     """One-time: copy the pre-ADR-016 flat prefix into an immutable version, server-side."""
     version = args.version
@@ -404,6 +459,10 @@ def main():
     p.add_argument("--fetched-on")
     p.add_argument("--adrs", help="comma-separated ADR numbers the data was built under")
     p.add_argument("--dry-run", action="store_true")
+    p = sub.add_parser("evidence", help="sync data/fetch_cache/ with S3 (ADR-023 evidence)")
+    p.add_argument("direction", choices=["push", "pull"])
+    p.add_argument("--force", action="store_true", help="pull: overwrite local files that differ")
+    p.add_argument("--dry-run", action="store_true")
     sub.add_parser("push")  # removed — kept only to explain what replaced it
     args = parser.parse_args()
 
@@ -411,7 +470,7 @@ def main():
         sys.exit("`push` was replaced by `publish <version>` (ADR-016): versions are immutable.")
     s3 = make_client()
     {"list": cmd_list, "status": cmd_status, "pull": cmd_pull, "publish": cmd_publish,
-     "freeze-legacy": cmd_freeze_legacy}[args.command](s3, args)
+     "freeze-legacy": cmd_freeze_legacy, "evidence": cmd_evidence}[args.command](s3, args)
 
 
 if __name__ == "__main__":

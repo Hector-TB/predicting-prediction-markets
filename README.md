@@ -29,6 +29,7 @@ cp .env.example .env
 
 # 3. Pull data files from S3
 python data/sync.py pull
+python data/sync.py evidence pull   # Gamma records meta_checks.py needs (ADR-023)
 ```
 
 `.env` requires:
