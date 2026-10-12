@@ -55,6 +55,15 @@ Metadata feeds snapshot windows, time features, filters and the split. An estima
 - v2 stays as published (immutable, ADR-016). Its meta CSV has estimated dates for 14,886 markets and includes the 13 too-short markets. Its training snapshots used real dates. Note this when comparing v2 and v3.
 - A fetch cache is now required to build or publish.
 
+## Amendment (2026-10-12): the evidence is backed up on S3
+
+`data/fetch_cache/` was only on one laptop. The `staging/2026-09-27/` copy is older and is missing the 2026-09-30 incremental fetch and `lookups.csv`, so losing the laptop would have made v4's meta unverifiable. Found while preparing a move to a new machine.
+
+- `python data/sync.py evidence push` mirrors `data/fetch_cache/` to `s3://<bucket>/evidence/fetch_cache/`; `evidence pull` restores it (refuses to overwrite differing local files without `--force`).
+- `sync.py publish` pushes the evidence before uploading a version, so every published meta has its evidence on S3.
+- The evidence is not part of a dataset version: it accumulates across fetches and `lookups.csv` is appended in place. A replaced file stays recoverable through bucket versioning.
+- Uploaded 2026-10-12: all 46 files; a pull into an empty directory matched byte for byte.
+
 ## Related ADRs
 
 - ADR-008: Market filters (30-day minimum the 13 markets failed)

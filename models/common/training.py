@@ -14,6 +14,8 @@ Import pattern (from any models/<name>/train.py):
     from models.common.training import load_dataset, split_holdout, market_weights, fit_calibrator
 """
 
+import argparse
+import json
 import logging
 from pathlib import Path
 
@@ -92,6 +94,27 @@ def market_weights(market_ids) -> np.ndarray:
     ids = pd.Series(np.asarray(market_ids))
     w = 1.0 / ids.map(ids.value_counts()).to_numpy(dtype=np.float64)
     return (w / w.mean()).astype(np.float32)
+
+
+def add_training_args(parser: argparse.ArgumentParser) -> None:
+    """Options every train.py shares (ADR-019)."""
+    parser.add_argument("--params",
+                        help="settings as JSON or a .json file: skip the settings search and use these "
+                             "(a refresh passes production's, ADR-019)")
+    parser.add_argument("--out-dir", type=Path,
+                        help="write artifacts/ and predictions/ here instead of the model's own folders")
+
+
+def load_params(value: str | None, expected: set[str]) -> dict | None:
+    """Parse --params; the keys must be exactly the ones the model's search would choose."""
+    if not value:
+        return None
+    path = Path(value)
+    params = json.loads(path.read_text() if path.suffix == ".json" and path.exists() else value)
+    if set(params) != expected:
+        raise SystemExit(f"ERROR: --params needs exactly {sorted(expected)}, got {sorted(params)}")
+    log.info("  Using given settings (no search): %s", params)
+    return params
 
 
 def fit_calibrator(p_holdout: np.ndarray, y_holdout: np.ndarray) -> IsotonicRegression:

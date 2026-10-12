@@ -7,7 +7,8 @@ Streams the data in chunks, so it runs in well under 1 GB of RAM.
 1. Raw build (data/polymarket_ml_dataset.csv), every row:
    structure (duplicates, one block per market, exact 12h spacing), window
    (burn-in, scheduled end, closedTime), agreement with meta (outcome, split,
-   category), value invariants (price range, rolling-feature consistency).
+   category where set: new markets are categorised after the build, so their
+   CSV rows have none), value invariants (price range, rolling-feature consistency).
 2. Comparison with a published version's raw snapshots (default v2) on shared
    markets. Differences must be explained:
      - v3 raw rows are cleaned the same way first (fix_dataset.fix_chunk)
@@ -15,13 +16,21 @@ Streams the data in chunks, so it runs in well under 1 GB of RAM.
      - rows only in the old version must be after closedTime
      - rows only in the new one must be in the last ~14 days (ADR-022)
 3. Training files (*_clean.parquet): no market in two splits, cutoff respected
-   (ADR-021), no settled prices, no NaN features, outcome = meta, and both
-   clean files hold exactly the same rows.
+   (ADR-021), no settled prices, no NaN features, outcome and category = meta,
+   and both clean files hold exactly the same rows.
+
+With --parent vN (incremental builds, ADR-019), step 2 is replaced by a
+comparison of the merged raw parquet with the parent version's, market by market:
+  - every parent market is still there, with identical rows except `split`
+    (T moves on every refresh); a changed category is reported, not failed;
+  - every market that is new is in this build's raw CSV;
+  - every market's category in the merged raw parquet equals meta's.
 
 Exits non-zero if anything is unexplained.
 
 Usage:
-    python scripts/check_snapshots.py [--compare-with v2]
+    python scripts/check_snapshots.py [--compare-with v2]   # full rebuild vs an older version
+    python scripts/check_snapshots.py --parent v3           # incremental build vs its parent
 """
 
 import argparse
@@ -46,6 +55,7 @@ from fix_leakage import PRICE_THRESHOLD, split_cutoff  # noqa: E402
 from stream_parquet import iter_frames  # noqa: E402
 
 RAW_CSV    = DATA / "polymarket_ml_dataset.csv"
+RAW_PQ     = DATA / "polymarket_ml_dataset.parquet"
 CLEAN      = DATA / "polymarket_ml_dataset_clean.parquet"
 CLEAN_TR   = DATA / "polymarket_ml_dataset_with_trends_clean.parquet"
 CHUNK_ROWS = 400_000
@@ -109,8 +119,14 @@ def check_raw(m: pd.DataFrame, old_path: Path | None) -> tuple[Counter, Counter,
         issues["before 14-day burn-in"] += int((df["ts"] < start + pd.Timedelta(days=14) - second).sum())
         issues["after scheduled end"] += int((df["ts"] > end + second).sum())
         issues["after closedTime"] += int((df["ts"] > closed + second).sum())
-        for col in ["outcome", "split", "category"]:
+        for col in ["outcome", "split"]:
             issues[f"{col} differs from meta"] += int((df[col].astype(str) != ids.map(m[col]).astype(str)).sum())
+        # categorize_markets.py assigns new markets' categories after the build, in the
+        # merged parquet and meta; the clean and parent checks compare those with meta
+        has_cat = df["category"].notna()
+        issues["category differs from meta"] += int(
+            (df.loc[has_cat, "category"].astype(str) != ids[has_cat].map(m["category"]).astype(str)).sum())
+        notes["category blank (assigned after the build)"] += int((~has_cat).sum())
         # values
         notes["price outside [0,1] (clipped by fix_dataset)"] += int(
             ((df["price_at_snapshot"] < 0) | (df["price_at_snapshot"] > 1)).sum())
@@ -189,10 +205,67 @@ def compare_chunk(new: pd.DataFrame, m: pd.DataFrame, old_path: Path,
         note_ids(f"{c}: values differ", both.loc[differs, "market_id"])
 
 
+def market_digests(path: Path, exclude: list[str]) -> dict[str, tuple]:
+    """
+    Per market: (rows, digest of its rows without `exclude`). Two 31-bit sums of
+    the row hashes make a 62-bit, order-independent digest that fits int64.
+    """
+    out: dict[str, list] = {}
+    for df in iter_frames(path):
+        df = df.drop(columns=[c for c in exclude if c in df.columns])
+        cols = sorted(df.columns)
+        h = pd.util.hash_pandas_object(df[cols], index=False).to_numpy(dtype=np.uint64)
+        parts = pd.DataFrame({"market_id": df["market_id"].values,
+                              "lo": (h & 0x7FFFFFFF).astype(np.int64),
+                              "hi": ((h >> 33) & 0x7FFFFFFF).astype(np.int64)})
+        g = parts.groupby("market_id").agg(n=("lo", "size"), lo=("lo", "sum"), hi=("hi", "sum"))
+        for mid, n, lo, hi in g.itertuples():
+            prev = out.get(mid, [0, 0, 0])
+            out[mid] = [prev[0] + n, prev[1] + lo, prev[2] + hi]
+    return {k: tuple(v) for k, v in out.items()}
+
+
+def check_against_parent(parent_path: Path, meta: pd.DataFrame) -> tuple[Counter, Counter]:
+    """Merged raw parquet vs the parent version's (incremental builds, ADR-019)."""
+    issues, notes = Counter(), Counter()
+    category = meta.set_index("market_id")["category"].astype(str)
+    for df in iter_frames(RAW_PQ, columns=["market_id", "category"]):
+        bad = df["category"].astype(str) != df["market_id"].map(category)
+        issues["raw parquet category differs from meta"] += int(bad.sum())
+        note_ids("raw parquet category differs from meta", df.loc[bad, "market_id"].unique())
+    built = set()
+    if RAW_CSV.exists():
+        for chunk in pd.read_csv(RAW_CSV, usecols=["market_id"], chunksize=CHUNK_ROWS):
+            built.update(chunk["market_id"].unique())
+
+    new_full, old_full = market_digests(RAW_PQ, ["split"]), market_digests(parent_path, ["split"])
+    new_nocat, old_nocat = market_digests(RAW_PQ, ["split", "category"]), market_digests(parent_path, ["split", "category"])
+
+    gone = set(old_full) - set(new_full)
+    added = set(new_full) - set(old_full)
+    issues["parent markets missing from the new version"] = len(gone)
+    note_ids("parent markets missing from the new version", gone)
+    issues["new markets not in this build's raw CSV"] = len(added - built)
+    note_ids("new markets not in this build's raw CSV", added - built)
+    notes["new markets (built this run)"] = len(added & built)
+
+    shared = set(old_full) & set(new_full)
+    changed = {m for m in shared if new_nocat[m] != old_nocat[m]}
+    recat = {m for m in shared if m not in changed and new_full[m] != old_full[m]}
+    issues["shared markets whose rows changed (apart from split)"] = len(changed)
+    note_ids("shared markets whose rows changed (apart from split)", changed)
+    notes["shared markets, rows identical apart from split"] = len(shared) - len(changed) - len(recat)
+    notes["shared markets whose category changed"] = len(recat)
+    notes["rows in the new raw parquet"] = sum(v[0] for v in new_full.values())
+    notes["rows in the parent raw parquet"] = sum(v[0] for v in old_full.values())
+    return issues, notes
+
+
 def check_clean(meta: pd.DataFrame, closed_times: pd.DataFrame) -> tuple[Counter, dict]:
     issues = Counter()
     cutoff = split_cutoff(closed_times)
     outcome = meta.set_index("market_id")["outcome"]
+    category = meta.set_index("market_id")["category"].astype(str)
     markets: dict[str, set] = {}
     rng: dict[str, list] = {}
     rows: Counter = Counter()
@@ -217,6 +290,8 @@ def check_clean(meta: pd.DataFrame, closed_times: pd.DataFrame) -> tuple[Counter
             feats = [c for c in df.columns if c not in TEXT_COLS]
             issues["NaN in features"] += int(df[feats].isna().sum().sum())
             issues["outcome differs from meta"] += int((df["outcome"] != df["market_id"].map(outcome)).sum())
+            issues["category differs from meta"] += int(
+                (df["category"].astype(str) != df["market_id"].map(category)).sum())
         digest[path.name] = (n, h)
 
     issues["market in train and test"] = len(markets.get("train", set()) &
@@ -239,21 +314,31 @@ def report(title: str, issues: Counter, notes: Counter | None = None) -> int:
     return sum(1 for v in issues.values() if v)
 
 
-def main(compare_with: str | None) -> int:
+def download_raw(version: str, dest: Path) -> Path:
+    load_dotenv(ROOT / ".env")
+    log.info("Downloading %s raw snapshots for comparison ...", version)
+    boto3.client("s3", region_name=os.getenv("AWS_REGION", "us-east-1")).download_file(
+        os.environ["S3_BUCKET"], f"datasets/{version}/polymarket_ml_dataset.parquet", str(dest))
+    return dest
+
+
+def main(compare_with: str | None, parent: str | None = None) -> int:
     meta = pd.read_csv(DATA / "polymarket_markets_meta.csv", dtype={"clob_token_id": str})
     m = load_reference(meta)
     failed = 0
     with tempfile.TemporaryDirectory() as tmp:
-        old_path = None
-        if compare_with:
-            load_dotenv(ROOT / ".env")
-            old_path = Path(tmp) / f"{compare_with}_raw.parquet"
-            log.info("Downloading %s raw snapshots for comparison ...", compare_with)
-            boto3.client("s3", region_name=os.getenv("AWS_REGION", "us-east-1")).download_file(
-                os.environ["S3_BUCKET"], f"datasets/{compare_with}/polymarket_ml_dataset.parquet", str(old_path))
-        log.info("Checking %s ...", RAW_CSV.name)
-        issues, notes, n = check_raw(m, old_path)
-        failed += report(f"RAW BUILD — {n:,} rows" + (f" (vs {compare_with})" if compare_with else ""), issues, notes)
+        old_path = download_raw(compare_with, Path(tmp) / f"{compare_with}_raw.parquet") if compare_with else None
+        if RAW_CSV.exists():
+            log.info("Checking %s ...", RAW_CSV.name)
+            issues, notes, n = check_raw(m, old_path)
+            failed += report(f"RAW BUILD — {n:,} rows" + (f" (vs {compare_with})" if compare_with else ""), issues, notes)
+        else:
+            log.info("No raw build CSV (%s) — nothing new was built.", RAW_CSV.name)
+        if parent:
+            parent_path = download_raw(parent, Path(tmp) / f"{parent}_raw.parquet")
+            log.info("Comparing %s with %s's, market by market ...", RAW_PQ.name, parent)
+            issues, notes = check_against_parent(parent_path, meta)
+            failed += report(f"VS PARENT {parent}", issues, notes)
 
     closed = pd.read_csv(DATA / "market_closed_times.csv")
     closed["closed_time"] = pd.to_datetime(closed["closed_time"], utc=True, format="mixed")
@@ -263,7 +348,7 @@ def main(compare_with: str | None) -> int:
     for split in s["rows"]:
         log.info("  %-16s %10s rows  %7s markets  %s → %s", split, f"{s['rows'][split]:,}",
                  f"{s['markets'][split]:,}", s["range"][split][0][:16], s["range"][split][1][:16])
-    if EXAMPLES:
+    if any(EXAMPLES.values()):
         out = ROOT / "logs" / f"check_snapshots_markets_{pd.Timestamp.now():%Y%m%d_%H%M}.csv"
         pd.DataFrame([(k, i) for k, ids in EXAMPLES.items() for i in sorted(ids)],
                      columns=["issue", "market_id"]).to_csv(out, index=False)
@@ -275,5 +360,10 @@ def main(compare_with: str | None) -> int:
 if __name__ == "__main__":
     logging.basicConfig(level=logging.INFO, format="%(message)s")
     parser = argparse.ArgumentParser(description="Full quality check of a snapshot build")
-    parser.add_argument("--compare-with", default="v2", help="published version to compare with ('' to skip)")
-    sys.exit(1 if main(parser.parse_args().compare_with or None) else 0)
+    group = parser.add_mutually_exclusive_group()
+    group.add_argument("--compare-with", default="v2",
+                       help="full rebuild: published version to compare raw rows with ('' to skip)")
+    group.add_argument("--parent", help="incremental build: the version it extends (ADR-019)")
+    args = parser.parse_args()
+    compare = None if args.parent else (args.compare_with or None)
+    sys.exit(1 if main(compare, args.parent) else 0)

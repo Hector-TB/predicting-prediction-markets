@@ -42,3 +42,10 @@ eda.ipynb
 
 # Pipeline run logs
 logs/
+
+# Model releases downloaded by the API (api/releases.py)
+.cache/
+
+# pip install -e build metadata, local virtual environment
+*.egg-info/
+.venv/

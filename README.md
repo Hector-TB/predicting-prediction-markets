@@ -29,6 +29,7 @@ cp .env.example .env
 
 # 3. Pull data files from S3
 python data/sync.py pull
+python data/sync.py evidence pull   # Gamma records meta_checks.py needs (ADR-023)
 ```
 
 `.env` requires:
@@ -157,6 +158,8 @@ All models train on the leakage-filtered `_clean` parquet files and follow one p
 - **Holdout by time:** the newest 20% of training markets (by resolution time) are held out, mirroring the train/test split.
 - **One weight per market:** each snapshot is weighted by 1 / its market's snapshot count, so long-running markets don't dominate. This is on top of class balancing.
 - **Settings, calibration and threshold** are chosen on the holdout. Calibration is isotonic, bounded to [0.001, 0.999]. The test set is scored once.
+
+Every `train.py` also takes `--params <json>` to skip the settings search and use given settings (a refresh passes production's; ADR-019), and `--out-dir` to write its outputs elsewhere. Trained models are packaged as immutable releases with `scripts/release.py` (`status` shows production).
 
 Shared evaluation utilities (AUC-ROC, PR-AUC, log-loss, Brier, calibration) are in `models/common/evaluation.py`. Prediction CSVs are not in git: after training, `python scripts/sync_predictions.py push`; to fetch them, `python scripts/sync_predictions.py pull --version v3`.
 

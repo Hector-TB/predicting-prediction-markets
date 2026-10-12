@@ -60,7 +60,7 @@ def main():
     ARTIFACTS_DIR.mkdir(parents=True, exist_ok=True)
     PREDICTIONS_DIR.mkdir(parents=True, exist_ok=True)
 
-    fit, holdout, test = load_and_split(trends=True)
+    fit, holdout, test, enc = load_and_split(trends=True)
 
     y_fit  = fit[TARGET].values.astype(np.int32)
     y_hold = holdout[TARGET].values.astype(np.int32)
@@ -101,7 +101,8 @@ def main():
 
     # Threshold chosen on the holdout — never on the test set (ADR-021)
     threshold, _ = find_optimal_threshold(y_hold, iso.transform(p_hold_raw))
-    joblib.dump({"rf": rf_trends, "iso": iso, "threshold": threshold},
+    joblib.dump({"rf": rf_trends, "iso": iso, "threshold": threshold, "encoder": enc,
+                 "features": FEATURES_TRENDS, "params": best_params},
                 ARTIFACTS_DIR / "trends_rf_trends_calibrated.pkl")
 
     proba_price = rf_price.predict_proba(X_test_price)[:, 1]

@@ -1,0 +1,16 @@
+{
+  "release": "r1",
+  "time_feature_fill": {
+    "days_before_close": 86.6,
+    "pct_lifetime_elapsed": 0.4376,
+    "duration_days": 172.0
+  },
+  "source": {
+    "dataset_version": "v3",
+    "file": "polymarket_ml_dataset_clean.parquet",
+    "sha256": "67a1997b202f6c211769290c38f865b8e0199893ad25c518b00e0a7a61bcd93b",
+    "rows": "split == 'train'",
+    "n_rows": 2038895
+  },
+  "note": "Computed 2026-10-09 because r1 predates the manifest field (ADR-025); releases from r2 on store it in their manifest."
+}

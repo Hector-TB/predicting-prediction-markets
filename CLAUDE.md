@@ -16,18 +16,19 @@ The course paper (research questions, methods, reported results) is `docs/paper/
 
 ---
 
-## Current state (as of 2026-09-29)
+## Current state (as of 2026-10-09)
 
-Dataset versions on S3 (ADR-016, manifests in `data/manifests/`): **v1** = the course paper's data; **v2** = full re-fetch + leakage filter + split by resolution time (ADR-013/014/021); **v3 (LATEST)** = v2 without the 14-day pre-close cutoff, metadata matched to Gamma (ADR-022/023). Local `data/` holds v3.
+Dataset versions on S3 (ADR-016, manifests in `data/manifests/`): **v1** = the course paper's data; **v2** = full re-fetch + leakage filter + split by resolution time (ADR-013/014/021); **v3** = v2 without the 14-day pre-close cutoff, metadata matched to Gamma (ADR-022/023); **v4 (LATEST)** = v3 + 769 markets from the first incremental refresh (2026-10-02, cutoff T = 2026-07-02 15:09 UTC; trained into candidate r2, not yet loaded into Supabase). Local `data/` holds v4.
 
 - v3: 45,130 markets; 2,534,852 clean snapshots (train 2,038,895 / 23,120 markets; test 196,977 / 4,924; `test_pre_cutoff` 298,980 unused); cutoff T = 2026-07-01 07:11 UTC. Coverage check: 0 markets missed; full quality check passed
-- LR, XGBoost and RF trained on v3 under one protocol (ADR-024, `models/common/training.py`); re-score in `docs/paper/rescore_v3_data.md`. README results are still the paper's (v1). v2 won't be trained (superseded by v3)
+- LR, XGBoost and RF trained on v3 under one protocol (ADR-024, `models/common/training.py`); re-score in `docs/paper/rescore_v3_data.md`. v2 won't be trained (superseded by v3)
+- Model releases (ADR-019): **r1 = the v3 models, PRODUCTION** (`s3://…/models/r1/`, record in `models/releases/`). `python scripts/release.py status`. The local `models/*/artifacts/` are working copies; releases are the source of truth
 - Gates before any publish: `meta_checks.py` (in the pipeline), `scripts/coverage_check.py`, `scripts/check_snapshots.py`
-- Leftovers to delete when convenient (user said no rush): `data/polymarket_ml_dataset.v2.csv` (on S3 staging), `data/*.bak.csv`, `data/*_part[12]*.parquet`, `s3://…/staging/2026-09-27/` and `staging/2026-09-28-v3/`
-- Supabase (free tier): refreshed with v3 on 2026-09-29 (45,130 v3 markets with Gamma dates, 1,755 trends rows, model runs for v1 + v3). The 13 v1-only markets (dropped by ADR-023) were deleted, so `markets` matches v3 exactly. `db/load_parquet.py` only upserts: delete markets dropped from a new version by hand. Re-check tables after any unpause before assuming data loss
+- Leftovers cleaned up 2026-10-12: the S3 staging data files are deleted (all duplicated in `datasets/` or `evidence/`); their build/pipeline/coverage logs moved to `s3://…/datasets/v2/logs/` and `datasets/v3/logs/` (not in the manifests; `staging/` is gone)
+- Supabase (free tier; pauses when idle — the hostname stops resolving): migrations 005 + 006 applied 2026-10-09, RLS on for all tables (the API connects as owner); live lookups go to `snapshots` / `predictions`, looked-up markets have `split` NULL and `resolution_status` set. Refreshed with v3 on 2026-09-29 (45,130 v3 markets with Gamma dates, 1,755 trends rows, model runs for v1 + v3). The 13 v1-only markets (dropped by ADR-023) were deleted, so `markets` matches v3 exactly. `db/load_parquet.py` only upserts: delete markets dropped from a new version by hand. Re-check tables after any unpause before assuming data loss
 - S3 bucket versioning on; `pipeline-leakage-and-categories` merged to `main` (PR #1, 2026-09-29)
-- Machine: 8 GB RAM, 2 physical cores; VS Code runs from a translocated path (move it to Applications). Background jobs started from Claude die if VS Code quits
-- No API, no frontend yet
+- Machine (since 2026-10-12): Windows + WSL2, 12 cores, WSL gets ~3.7 GB RAM + 1 GB swap (raise `memory=` in `.wslconfig` if a job is `Killed` / exit 137). WSL2 has no IPv6, so `DATABASE_URL` must be the Supabase session pooler (`postgres.<ref>@aws-0-<region>.pooler.supabase.com:5432`), not the IPv6-only `db.<ref>.supabase.co`
+- API skeleton in `api/` (`python3 -m uvicorn api.main:app --reload`; tests `python3 -m pytest tests/`): `/resolve`, `/predict` with ADR-025 warnings; every lookup is stored in Supabase (`api/store.py`; migrations 005 + 006 applied 2026-10-09). Frontend in `web/` (search + market page; `cd web && npm run dev`, see `web/README.md`). Page views store lookups — for testing, run the API with `DATABASE_URL=` so nothing is stored
 
 ## Next session — start here (in order)
 
@@ -35,7 +36,8 @@ Dataset versions on S3 (ADR-016, manifests in `data/manifests/`): **v1** = the c
 2. **Re-score** ✓ `docs/paper/rescore_v3_data.md`: XGBoost/RF beat the market (ΔAUC ≈ +0.014 [+0.009, +0.020]; per-market-weighted ΔAUC +0.011, Δlog-loss −0.013, both CIs clear of zero; LR ≈ market). The edge is ≥ 30 days before close, also within markets of the same length; none in markets > 1 year. Trading survives a 2¢/token cost, but fills at the recorded price are unverified. README results updated (v3 table first, the paper's v1 table kept as published).
 3. ~~**Refresh Supabase**~~ ✓ 2026-09-29.
 4. ~~**Merge** → `main`~~ ✓ PR #1, 2026-09-29.
-5. **Now:** the one-command refresh + model releases: ROADMAP step 4 has the build order, and ADR-019's amendment the design. The end-date fetch (ADR-020) is merged (PR #2); its dry run found 737 new markets, which the first refresh turns into v4 → candidate `r2`. After that: site prerequisites and API (ROADMAP 5–6). Unscheduled work (walk-forward backtest, Trends rework, volume to date, realistic fills) is under *Parked* in ROADMAP.md.
+5. **One-command refresh** (ROADMAP step 4, branch `one-command-refresh`): the first real refresh published **v4** on 2026-10-02 (769 new markets), and finished on 2026-10-12: candidate **r2** (v4), verdict PASS (`models/releases/r2_report.md`). r1 stays production until you decide: `python scripts/release.py promote r2` (or `reject r2`). Remaining step-4 items (migration 005, loader pruning, incremental-build retries) are in ROADMAP.
+6. **Now: API + site** (ROADMAP 5–7). Order: shared per-snapshot feature function + parity test vs training snapshots → `/predict` endDate decision (ADR) → FastAPI (`/resolve`, `/predict`, then `/track-record` + daily resolution job) → React. Unscheduled work (walk-forward backtest, Trends rework, volume to date, realistic fills, cloud runner) is under *Parked* in ROADMAP.md.
 
 ## Key conventions
 
@@ -56,6 +58,12 @@ Dataset versions on S3 (ADR-016, manifests in `data/manifests/`): **v1** = the c
 **Model comparisons (ADR-015):** score every model and the market baseline on the same test rows; get CIs by resampling markets (`bootstrap_auc_diff(..., groups=market_id)`); in trading simulations a NO trade costs `1 − p`.
 
 **No bare `print()` in new code** — use Python's `logging` module.
+
+**Working with Hector:** plan first: share findings and agree on direction before changing code. When a change rests on an ML or evaluation idea, explain it plainly with a concrete example from this project. When he brings ideas from his reading, map them onto this project (what we already do, what's missing, what it would change) rather than summarising.
+
+**No preemptive optimization:** don't make speculative memory/performance changes (e.g. slimming data loading, capping `n_jobs`). Explain the risk and its failure signature (`Killed` / exit 137, swap filling) and wait until it actually happens. Fixes for demonstrated failures, and measuring a cost up front (e.g. a day-long rebuild) before proposing a speedup, are fine.
+
+**README tone:** keep the README neutral about the course paper: present its results as published and never say its numbers or methods were wrong. Corrections and caveats go in ADRs and `docs/paper/README.md`; don't restate figures known to be miscalculated until re-measured.
 
 ---
 
@@ -115,5 +123,6 @@ Dataset versions on S3 (ADR-016, manifests in `data/manifests/`): **v1** = the c
 - ADR-020: incremental fetch by scheduled end date (≥ last fetch − 30d, no upper bound), last fetch time in `data/fetch_state.json`, fetch files kept as ADR-023 evidence (`--full --resume` to reuse checkpoints), `--dry-run`; pre-publish coverage check
 - ADR-021: leak-free evaluation — split by resolution time + pre-cutoff test rows dropped, thresholds from held-out train data, `log_volume` dropped
 - ADR-022: no 14-day pre-close cutoff from v3 (price rule only); full snapshot rebuild with retries + settings guard
-- ADR-023: meta must match Gamma — no estimated/placeholder values; fresh fetch wins on merge (category/split kept); `meta_checks.py` blocks pipeline/build/publish; repair with `scripts/refresh_meta.py`
+- ADR-023: meta must match Gamma — no estimated/placeholder values; fresh fetch wins on merge (category/split kept); `meta_checks.py` blocks pipeline/build/publish; repair with `scripts/refresh_meta.py`; the evidence (`data/fetch_cache/`) is on S3: `sync.py evidence pull` on a new machine
 - ADR-024: one training protocol for all models — time-ordered holdout, one weight per market, calibration + threshold from the holdout (supersedes ADR-021 decisions 2–3)
+- ADR-025: always predict an open binary market; missing/odd inputs filled for the models only (no endDate → training medians, past endDate → 0 days left) and flagged with warning codes
