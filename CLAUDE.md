@@ -59,6 +59,12 @@ Dataset versions on S3 (ADR-016, manifests in `data/manifests/`): **v1** = the c
 
 **No bare `print()` in new code** — use Python's `logging` module.
 
+**Working with Hector:** plan first: share findings and agree on direction before changing code. When a change rests on an ML or evaluation idea, explain it plainly with a concrete example from this project. When he brings ideas from his reading, map them onto this project (what we already do, what's missing, what it would change) rather than summarising.
+
+**No preemptive optimization:** don't make speculative memory/performance changes (e.g. slimming data loading, capping `n_jobs`). Explain the risk and its failure signature (`Killed` / exit 137, swap filling) and wait until it actually happens. Fixes for demonstrated failures, and measuring a cost up front (e.g. a day-long rebuild) before proposing a speedup, are fine.
+
+**README tone:** keep the README neutral about the course paper: present its results as published and never say its numbers or methods were wrong. Corrections and caveats go in ADRs and `docs/paper/README.md`; don't restate figures known to be miscalculated until re-measured.
+
 ---
 
 ## What NOT to do
@@ -117,6 +123,6 @@ Dataset versions on S3 (ADR-016, manifests in `data/manifests/`): **v1** = the c
 - ADR-020: incremental fetch by scheduled end date (≥ last fetch − 30d, no upper bound), last fetch time in `data/fetch_state.json`, fetch files kept as ADR-023 evidence (`--full --resume` to reuse checkpoints), `--dry-run`; pre-publish coverage check
 - ADR-021: leak-free evaluation — split by resolution time + pre-cutoff test rows dropped, thresholds from held-out train data, `log_volume` dropped
 - ADR-022: no 14-day pre-close cutoff from v3 (price rule only); full snapshot rebuild with retries + settings guard
-- ADR-023: meta must match Gamma — no estimated/placeholder values; fresh fetch wins on merge (category/split kept); `meta_checks.py` blocks pipeline/build/publish; repair with `scripts/refresh_meta.py`
+- ADR-023: meta must match Gamma — no estimated/placeholder values; fresh fetch wins on merge (category/split kept); `meta_checks.py` blocks pipeline/build/publish; repair with `scripts/refresh_meta.py`; the evidence (`data/fetch_cache/`) is on S3: `sync.py evidence pull` on a new machine
 - ADR-024: one training protocol for all models — time-ordered holdout, one weight per market, calibration + threshold from the holdout (supersedes ADR-021 decisions 2–3)
 - ADR-025: always predict an open binary market; missing/odd inputs filled for the models only (no endDate → training medians, past endDate → 0 days left) and flagged with warning codes
