@@ -1,8 +1,8 @@
 {
   "release": "r3",
   "created_at": "2026-10-12T17:10:45+00:00",
-  "promoted_at": null,
-  "status": "candidate",
+  "promoted_at": "2026-10-12T17:20:38+00:00",
+  "status": "promoted",
   "parent": "r2",
   "notes": "v4 retrained with r2's settings under the pinned library versions (scikit-learn 1.9.1, XGBoost 3.4.1, pandas 3.0.6; ADR-019 amendment).",
   "dataset_version": "v4",

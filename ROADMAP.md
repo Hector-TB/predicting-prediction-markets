@@ -58,7 +58,7 @@ Build order:
 
 ### 4b. Library pins and the version upgrade (ADR-019 amendment, 2026-10-12)
 - [x] r1/r2 couldn't load under the new machine's scikit-learn 1.9.1 (`pyproject.toml` only had minimums). Exact pins for the release libraries, versions recorded per release and checked on load (API, `release.py`), `promote` reproduces published predictions first, `tests/test_environment.py`
-- [ ] r3 = v4 retrained with r2's settings under the pinned versions → report vs r2 → promote. r1/r2 then load only under their recorded versions (`models/releases/r{1,2}_environment.json`)
+- [x] **r3 promoted 2026-10-12**: v4 retrained with r2's settings under the pinned versions (LR 26 s, XGBoost 26 s, RF 6 min; peak 3.7 GB, needed the WSL raise to 6 GB). vs r2: LR identical, XGBoost AUC 0.8067 vs 0.8072, RF 0.8057 vs 0.8056, all checks pass; `promote` reproduced 2,000 published predictions per model. r1/r2 now load only under their recorded versions (`models/releases/r{1,2}_environment.json`)
 
 ---
 
