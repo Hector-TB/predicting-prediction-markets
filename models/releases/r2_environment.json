@@ -1,0 +1,6 @@
+{
+  "release": "r2",
+  "environment": {"scikit-learn": "1.7.2", "xgboost": "3.2.0", "numpy": "2.3.3", "pandas": "2.3.2",
+                  "scipy": "1.16.2", "joblib": "1.5.2"},
+  "source": "scikit-learn and xgboost read from r2's saved artifacts on 2026-10-12; numpy, pandas, scipy and joblib are the pyproject.toml minimums of the time. Under exactly these versions r2 reproduced all 227,280 published test predictions of every model (max diff 3e-8, CSV rounding). r2 predates the manifest's environment field."
+}

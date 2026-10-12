@@ -188,6 +188,20 @@ Details the plan above left open, settled while writing `release.py candidate | 
 
 A walk-forward backtest (testing the modelling approach across many past periods) was proposed in the same review. It is parked: see *Parked* in `ROADMAP.md`. It gets its own ADR when it is built.
 
+## Amendment (2026-10-12): a release is tied to its library versions
+
+**What happened.** r1 and r2 were trained on the old machine with scikit-learn 1.7.2 and XGBoost 3.2.0. `pyproject.toml` only set minimum versions, so the new machine (WSL2, set up 2026-10-12) installed scikit-learn 1.9.1, XGBoost 3.4.1 and pandas 3.0.6. Under those, the LR and XGBoost artifacts of both releases fail to load (`'SimpleImputer' object has no attribute '_fill_dtype'`), so `/predict` failed for every market; RF loaded, but scikit-learn doesn't guarantee unpickled models give the same results across versions. Under the old versions r2 reproduced all 227,280 published test predictions of every model (max diff 3e-8), so the models themselves were fine.
+
+**Decision.**
+1. **Exact pins** (`==`) in `pyproject.toml` for every library a release depends on (`release.PINNED`: scikit-learn, xgboost, numpy, pandas, scipy, joblib, pyarrow): artifacts are pickles of them and features are computed with them. Changing a pin means training a new release under the new versions.
+2. **Every manifest records** `environment` (the pinned libraries' versions at packaging time). r1 and r2 predate the field: `models/releases/r1_environment.json` / `r2_environment.json` hold what was read from their artifacts.
+3. **Loading a release under other versions is refused** with a message naming each mismatch: the API (`api/releases.load`), `release.py report` (the candidate), `promote` and `rollback`.
+4. **`promote` loads every artifact of the candidate and reproduces 2,000 of its published test predictions** in the current environment before switching production.
+5. **`report` compares against production's published test predictions** when both releases share a dataset version, so a release built under new versions can be compared with one that needs the old ones.
+6. **`tests/test_environment.py`** fails when the installed versions differ from the pins, or the pins from the production release's.
+
+**Upgrade to current versions (r3).** Rather than pin the old versions: pandas 2.3.2 can't load the full dataset in this machine's 3.7 GB WSL (killed; pandas 3: 1.9 GB peak), and pandas 2 gets only maintenance releases. r3 = v4 retrained with r2's settings under the new pins. Before that, `check_feature_parity.py --n 150 --seed 7` (13,663 stored rows): under the new versions 4 rows differ, under the old versions on the same machine 2 rows, all by 1e-6 in `price_trend_7d/14d` only (a least-squares slope rounded to 6 decimals: floating-point noise from this machine's CPU/BLAS tips the rounding). Every other feature matches exactly, so pandas 3 / numpy 2.5 compute the features as before. r1 and r2 now load only under their recorded versions: rolling back to them means installing those first (the check says which).
+
 ## Related ADRs
 
 - ADR-001: Temporal split (why test sets move between versions)

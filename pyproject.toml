@@ -8,10 +8,13 @@ version = "0.1.0"
 description = "ML models for forecasting Polymarket binary prediction market outcomes"
 requires-python = ">=3.13"
 dependencies = [
+    # Exact pins: saved models only load reliably, and features only compute identically,
+    # under the versions a release was built with. Changing one = train a new release
+    # (CLAUDE.md, ADR-019 amendment); tests/test_environment.py checks the installed versions.
     # Data
-    "pandas>=2.3.2",
-    "numpy>=2.3.3",
-    "pyarrow>=24.0.0",
+    "pandas==3.0.6",
+    "numpy==2.5.4",
+    "pyarrow==26.0.0",
 
     # HTTP / APIs
     "requests>=2.32.5",
@@ -26,10 +29,10 @@ dependencies = [
     "duckdb>=1.1",
 
     # ML
-    "scikit-learn>=1.7.2",
-    "xgboost>=3.2.0",
-    "scipy>=1.16.2",
-    "joblib>=1.5.2",
+    "scikit-learn==1.9.1",
+    "xgboost==3.4.1",
+    "scipy==1.18.1",
+    "joblib==1.6.0",
     "shap>=0.46",
 
     # API (ADR-017)

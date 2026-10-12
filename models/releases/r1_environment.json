@@ -1,0 +1,5 @@
+{
+  "release": "r1",
+  "environment": {"scikit-learn": "1.7.2", "xgboost": "3.2.0"},
+  "source": "Read from r1's saved artifacts on 2026-10-12 (scikit-learn's _sklearn_version in every pickle; the version in the XGBoost booster). r1 predates the manifest's environment field; other library versions weren't recorded."
+}

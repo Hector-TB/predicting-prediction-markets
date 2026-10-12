@@ -27,7 +27,7 @@ Dataset versions on S3 (ADR-016, manifests in `data/manifests/`): **v1** = the c
 - Leftovers cleaned up 2026-10-12: the S3 staging data files are deleted (all duplicated in `datasets/` or `evidence/`); their build/pipeline/coverage logs moved to `s3://…/datasets/v2/logs/` and `datasets/v3/logs/` (not in the manifests; `staging/` is gone)
 - Supabase (free tier; pauses when idle — the hostname stops resolving): migrations 005 + 006 applied 2026-10-09, RLS on for all tables (the API connects as owner); live lookups go to `snapshots` / `predictions`, looked-up markets have `split` NULL and `resolution_status` set. Refreshed with v3 on 2026-09-29 (1,755 trends rows, model runs for v1 + v3; the 13 v1-only markets dropped by ADR-023 deleted by hand); v4 markets loaded 2026-10-12 (+769, 615 test → train from the moved T), so `markets` = v4's 45,899 + looked-up markets. r1 and r2 rows in `model_runs` (written by `release.py`). `db/load_parquet.py` only upserts: delete markets dropped from a new version by hand. Re-check tables after any unpause before assuming data loss
 - S3 bucket versioning on; merged to `main`: PR #1 (v3 + training protocol), #2 (incremental fetch), #3 (`one-command-refresh`: refresh, r2 candidate, API + site start; 2026-10-12)
-- Machine (since 2026-10-12): Windows + WSL2, 12 cores, WSL gets ~3.7 GB RAM + 1 GB swap (raise `memory=` in `.wslconfig` if a job is `Killed` / exit 137). WSL2 has no IPv6, so `DATABASE_URL` must be the Supabase session pooler (`postgres.<ref>@aws-0-<region>.pooler.supabase.com:5432`), not the IPv6-only `db.<ref>.supabase.co`
+- Machine (since 2026-10-12): Windows + WSL2, 12 cores, 7.7 GB RAM; WSL gets 6 GB + 4 GB swap since 2026-10-12 (`C:\Users\hecto\.wslconfig`; at the default 3.8 GB, training was `Killed` loading the dataset). If a job is `Killed` / exit 137, raise `memory=` there, then `wsl --shutdown`. WSL2 has no IPv6, so `DATABASE_URL` must be the Supabase session pooler (`postgres.<ref>@aws-0-<region>.pooler.supabase.com:5432`), not the IPv6-only `db.<ref>.supabase.co`
 - API skeleton in `api/` (`python3 -m uvicorn api.main:app --reload`; tests `python3 -m pytest tests/`): `/resolve`, `/predict` with ADR-025 warnings; every lookup is stored in Supabase (`api/store.py`; migrations 005 + 006 applied 2026-10-09). Frontend in `web/` (search + market page; `cd web && npm run dev`, see `web/README.md`). Page views store lookups — for testing, run the API with `DATABASE_URL=` so nothing is stored
 
 ## Next session — start here (in order)
@@ -52,6 +52,8 @@ Dataset versions on S3 (ADR-016, manifests in `data/manifests/`): **v1** = the c
 **Training protocol (ADR-024):** every model uses `models/common/training.py`: holdout = newest 20% of train markets by resolution time; `market_weights` (each market counts once); settings by holdout AUC; isotonic calibration + threshold from the holdout. Don't add per-model variants.
 
 **Train/test split:** market-level, by resolution time — first 80% resolved = train; test rows dated before the cutoff are `test_pre_cutoff` (unused). Never mix snapshots from the same market across splits; never tune thresholds or anything else on the test set. See ADR-021.
+
+**Library versions (ADR-019 amendment):** scikit-learn, xgboost, numpy, pandas, scipy, joblib, pyarrow are pinned with `==` in `pyproject.toml`; install with `uv pip install -e .`. A release only loads under the versions it was built with (recorded in its manifest; the API and `release.py` refuse otherwise). Never bump a pin on its own: bump → `check_feature_parity.py` → train a new release → promote. `tests/test_environment.py` checks it.
 
 **Shared evaluation code:** import `evaluate`, `check_calibration`, `find_optimal_threshold` from `models.common.evaluation` — never redefine them.
 
@@ -119,7 +121,7 @@ Dataset versions on S3 (ADR-016, manifests in `data/manifests/`): **v1** = the c
 - ADR-016: immutable dataset versions on S3 (`datasets/vN/` + manifest); `sync.py publish/pull`
 - ADR-017: on-demand prediction via search + stored live track record (design: `docs/design/search-and-predict.md`)
 - ADR-018: volume features used final lifetime volume (look-ahead) — dropped (ADR-021)
-- ADR-019: immutable model releases (rN) with change reports, gated promotion, one-command rollback
+- ADR-019: immutable model releases (rN) with change reports, gated promotion, one-command rollback; amendment 2026-10-12: exact library pins, versions recorded per release and checked on load
 - ADR-020: incremental fetch by scheduled end date (≥ last fetch − 30d, no upper bound), last fetch time in `data/fetch_state.json`, fetch files kept as ADR-023 evidence (`--full --resume` to reuse checkpoints), `--dry-run`; pre-publish coverage check
 - ADR-021: leak-free evaluation — split by resolution time + pre-cutoff test rows dropped, thresholds from held-out train data, `log_volume` dropped
 - ADR-022: no 14-day pre-close cutoff from v3 (price rule only); full snapshot rebuild with retries + settings guard

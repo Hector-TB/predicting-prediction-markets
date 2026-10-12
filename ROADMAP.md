@@ -56,11 +56,18 @@ Build order:
 
 ---
 
+### 4b. Library pins and the version upgrade (ADR-019 amendment, 2026-10-12)
+- [x] r1/r2 couldn't load under the new machine's scikit-learn 1.9.1 (`pyproject.toml` only had minimums). Exact pins for the release libraries, versions recorded per release and checked on load (API, `release.py`), `promote` reproduces published predictions first, `tests/test_environment.py`
+- [ ] r3 = v4 retrained with r2's settings under the pinned versions → report vs r2 → promote. r1/r2 then load only under their recorded versions (`models/releases/r{1,2}_environment.json`)
+
+---
+
 ## Next — search-and-predict with a live track record (ADR-017, `docs/design/search-and-predict.md`)
 
 ### 5. Prerequisites
 - ~~Decide and apply ADR-018~~ ✓ `log_volume` dropped (ADR-021)
-- [x] Shared feature code ✓ 2026-10-09: `data_collection_pipeline/features.py` (CLOB fetch, `raw_features`, `finish_features`, `features_at` for the API); `build_snapshots.py` and `fix_dataset.py` use it. `scripts/check_feature_parity.py` re-fetches sampled markets and recomputes every stored snapshot: 250 v4 markets / 22,808 rows, all 19 model features identical (a 12 h timestamp shift fails it). Re-run it after any feature change
+- [x] Shared feature code ✓ 2026-10-09: `data_collection_pipeline/features.py` (CLOB fetch, `raw_features`, `finish_features`, `features_at` for the API); `build_snapshots.py` and `fix_dataset.py` use it. `scripts/check_feature_parity.py` re-fetches sampled markets and recomputes every stored snapshot: 250 v4 markets / 22,808 rows, all 19 model features identical (a 12 h timestamp shift fails it). Re-run it after any feature change or library upgrade
+- [ ] `check_feature_parity.py` compares exactly, but on the WSL2 machine ~0.02% of rows differ by 1e-6 in `price_trend_7d/14d` (old and new library versions alike: floating-point noise tips the 6-decimal rounding of a least-squares slope; 2026-10-12, ADR-019 amendment). Allow one rounding step for rounded features so a real change still fails it
 - [x] DB migration written: `db/migrations/006_live_lookups.sql` (features + warnings on `snapshots`, resolution status on `markets`); applying it is under step 6
 - [x] `/predict` endDate handling ✓ 2026-10-09 (ADR-025): always predict; no `endDate` → time features from the release's training medians (`no_end_date`), passed → 0 days left (`past_end_date`); full warning list in ADR-025 and the design doc. Measured: r1 on the v4 test set with median time features still out-ranks the price (ΔAUC +0.010 [+0.003, +0.015]) but its log-loss is worse than the market's
 - Still open from that item: check whether Polymarket edits `endDate` while a market is open (meta stores the final value, so training time features could see an end date not yet known; cf. ADR-018). Lookups store the `endDate` seen at the time, so comparing with the final value answers it
