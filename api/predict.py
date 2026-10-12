@@ -12,14 +12,14 @@ from datetime import datetime, timezone
 from typing import Optional
 
 import anthropic
+import features
 import numpy as np
 import pandas as pd
-
-import features
-from api import gamma
-from api.releases import ServingRelease
 from categorize_markets import classify_batch
 from fetch_markets import MIN_DURATION_DAYS, VOLUME_NUM_MIN, parse_dt, parse_json_field
+
+from api import gamma
+from api.releases import ServingRelease
 
 log = logging.getLogger(__name__)
 
@@ -171,11 +171,21 @@ def predict(market_id: str, release: ServingRelease,
     raw = gamma.market_by_condition_id(market_id)
     if raw is None:
         raise PredictError("not_found", f"No Polymarket market with condition ID {market_id}.")
+    return predict_raw(raw, release, now)
+
+
+def predict_raw(raw: dict, release: ServingRelease, now: Optional[pd.Timestamp] = None,
+                reject: frozenset = frozenset()) -> tuple[dict, Market]:
+    """Predict a Gamma market dict. Raises PredictError("ineligible") if any warning code in
+    `reject` applies, before the category call (the daily sample, ADR-026)."""
     market = parse_market(raw)
     now = now or pd.Timestamp(datetime.now(timezone.utc))
 
     price_df = features.fetch_price_history(market.token, min_obs=1) if market.token else None
     feats, codes = build_features(market, price_df, now, release)
+    hit = reject.intersection(codes)
+    if hit:
+        raise PredictError("ineligible", f"Warnings {sorted(hit)}.")
 
     cat = category(market)
     if cat is None:

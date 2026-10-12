@@ -82,8 +82,14 @@ Build order:
 - `GET /resolve?q=` — URL / slug / event / condition ID / name → market(s)
 - `/predict` always predicts and attaches ADR-025's warning codes (stored with each lookup)
 - `GET /predict?market_id=` — features as of now → the production release's models (LR, XGBoost, RF) + gap vs price, with warnings for out-of-distribution markets (non-binary rejected); stores every lookup with its release
-- `GET /track-record` — backtest metrics + live metrics over resolved lookups, per release
-- Daily resolution job: record outcomes of looked-up markets (ADR-004 rule)
+- [x] **Live track record — code ✓ 2026-10-12 (ADR-026):**
+  - `scripts/resolve_lookups.py`: open markets → Gamma → ADR-004 outcome (`resolved` / `ambiguous`), `closed_time`, `resolved_at`
+  - `scripts/sample_markets.py`: daily random sample of 20 training-like open markets (8,552 eligible of 17,496 open on 2026-10-12), stored with `source = 'sample'`; draw seeded by the date
+  - `GET /track-record` (`api/track_record.py`): backtest per-market metrics + live metrics per release, sample vs search, first prediction per market vs Gamma's price at the lookup, market-bootstrap CIs, length-weighted (1 / eligible days) and by duration; counts only under 100 resolved markets
+  - `.github/workflows/live-track-record.yml`: daily 06:17 UTC + manual run
+- [ ] Add the six repo secrets, trigger the workflow by hand once, check the rows in Supabase
+- [ ] First live numbers: ~100 resolved sampled markets (months); a firm answer at ~1,000 (±0.010 AUC, ADR-026)
+- [ ] Track-record page in the React site (step 7)
 
 ---
 
