@@ -33,6 +33,7 @@ from the saved artifact.
 
 import argparse
 import importlib
+import importlib.metadata
 import json
 import logging
 import os
@@ -91,6 +92,43 @@ MODELS = {
 # model_runs.model_name of each release model (the names db/load_parquet.py uses)
 DB_NAMES = {"logistic_regression": "logistic_regression_base", "gradient_boosting": "xgboost_base",
             "random_forest": "random_forest_full_calibrated"}
+# Libraries a release depends on: its artifacts are pickles of them, and its features are
+# computed with them. Pinned exactly in pyproject.toml; recorded in every manifest.
+PINNED = ["scikit-learn", "xgboost", "numpy", "pandas", "scipy", "joblib", "pyarrow"]
+
+
+# ─────────────────────────────────────────────
+# ENVIRONMENT (the versions a release needs)
+# ─────────────────────────────────────────────
+
+def environment() -> dict:
+    """Installed versions of the pinned libraries."""
+    return {pkg: importlib.metadata.version(pkg) for pkg in PINNED}
+
+
+def release_environment(manifest: dict) -> dict:
+    """The versions a release was built with: its manifest's, or (r1, r2: before the field)
+    the file next to its record, read from the artifacts themselves."""
+    if "environment" in manifest:
+        return manifest["environment"]
+    path = RELEASES_DIR / f"{manifest['release']}_environment.json"
+    return json.loads(path.read_text())["environment"] if path.exists() else {}
+
+
+def check_environment(manifest: dict) -> None:
+    """Refuse to load a release under other library versions: its pickles may not load, or
+    load and predict differently, and features may compute differently."""
+    want = release_environment(manifest)
+    if not want:
+        raise SystemExit(f"ERROR: {manifest['release']} records no library versions — can't check them.")
+    have = environment()
+    diff = {pkg: (v, have.get(pkg)) for pkg, v in want.items() if have.get(pkg) != v}
+    if diff:
+        lines = "\n".join(f"  {pkg}: built with {v}, installed {h}" for pkg, (v, h) in diff.items())
+        raise SystemExit(f"ERROR: {manifest['release']} was built with other library versions:\n{lines}\n"
+                         f"Install the release's versions (uv pip install -e . at its git commit "
+                         f"{manifest.get('code', {}).get('git_commit', '?')[:8]}), or serve a release "
+                         f"built with the pinned ones.")
 
 
 # ─────────────────────────────────────────────
@@ -275,7 +313,7 @@ def package(release: str, model_dirs: dict[str, Path], out: Path, **fields) -> d
         "release": release, "created_at": now(), "promoted_at": None, **fields,
         "dataset_version": dataset["version"],
         "dataset_manifest_sha256": sha256_file(DATA_DIR / "manifest.json"),
-        "code": code, "adrs": ["019", "024"],
+        "code": code, "adrs": ["019", "024"], "environment": environment(),
         "test_set": {"rows": len(test), "markets": int(test["market_id"].nunique()),
                      "yes_rate": round(float(y.mean()), 4)},
         "market_baseline": {k: round(float(v), 5) for k, v in compute_metrics(y, market).items() if k != "n"},
@@ -363,8 +401,40 @@ def load_release(s3, source: str, dest: Path) -> tuple[dict, Path]:
     return manifest, folder
 
 
+def published_predictions(s3, manifest: dict, test: pd.DataFrame) -> dict[str, np.ndarray]:
+    """A release's stored test predictions, aligned with `test` (same dataset version)."""
+    out = {}
+    with tempfile.TemporaryDirectory() as tmp:
+        for name, entry in manifest["models"].items():
+            path = Path(tmp) / f"{name}.csv"
+            s3.download_file(BUCKET, f"{PREFIX}/{manifest['release']}/{entry['predictions']}", str(path))
+            ref = pd.read_csv(path, usecols=KEY + ["pred_prob"])
+            ref["snapshot_timestamp"] = pd.to_datetime(ref["snapshot_timestamp"], utc=True, format="mixed")
+            m = test[KEY].merge(ref, on=KEY, how="left")
+            if m["pred_prob"].isna().any():
+                raise SystemExit(f"ERROR: {manifest['release']}'s {name} predictions don't cover the local test set.")
+            out[name] = m["pred_prob"].to_numpy()
+    return out
+
+
+def smoke_check(s3, manifest: dict, n_rows: int = 2000) -> None:
+    """Load each artifact of a release here and reproduce a sample of its published predictions."""
+    test = load_test().sample(n_rows, random_state=0).reset_index(drop=True)
+    ref = published_predictions(s3, manifest, test)
+    with tempfile.TemporaryDirectory() as tmp:
+        _, folder = load_release(s3, manifest["release"], Path(tmp))
+        got = predict_release(manifest, folder, test)
+    for name in manifest["models"]:
+        diff = float(np.abs(got[name] - ref[name]).max())
+        if diff > 1e-6:
+            raise SystemExit(f"ERROR: {manifest['release']} {name} doesn't reproduce its predictions here "
+                             f"(max diff {diff:.2e}).")
+        log.info("  %-8s loads and reproduces %d published predictions (max diff %.1e)", SHORT[name], n_rows, diff)
+
+
 def predict_release(manifest: dict, folder: Path, test: pd.DataFrame) -> dict[str, np.ndarray]:
     """P(YES) of each model of a release on `test`, loading one artifact at a time (RF is large)."""
+    check_environment(manifest)
     out = {}
     for name, entry in manifest["models"].items():
         mod = importlib.import_module(MODELS[name]["module"])
@@ -427,8 +497,15 @@ def cmd_report(s3, args) -> None:
             raise SystemExit(f"ERROR: local data is {dataset['version']}, {cand['release']} was trained on "
                              f"{cand['dataset_version']} — pull it first (sync.py pull {cand['dataset_version']}).")
         test = load_test()
-        log.info("  Predicting with %s and %s ...", prod["release"], cand["release"])
-        p_prod = predict_release(prod, prod_dir, test)
+        if prod["dataset_version"] == cand["dataset_version"]:
+            # Same test set: production's published predictions, which also works when its
+            # artifacts need other library versions than the candidate's
+            log.info("  %s: its published predictions on %s", prod["release"], prod["dataset_version"])
+            p_prod = published_predictions(s3, prod, test)
+        else:
+            log.info("  Predicting with %s ...", prod["release"])
+            p_prod = predict_release(prod, prod_dir, test)
+        log.info("  Predicting with %s ...", cand["release"])
         p_cand = predict_release(cand, cand_dir, test)
 
     log.info("  Scoring (%d bootstrap resamples per comparison) ...", args.n_boot)
@@ -473,6 +550,8 @@ def cmd_promote(s3, args) -> None:
                  "".join(f"\n           warning: {w}" for w in c["warnings"]))
     log.info("Report: models/releases/%s_report.md", args.release)
     check_git_clean()
+    log.info("Checking that %s loads and predicts in this environment ...", args.release)
+    smoke_check(s3, cand)
     confirm(args.release, f"make it production (replacing {prod})")
 
     cand["status"], cand["promoted_at"] = "promoted", now()
@@ -511,6 +590,8 @@ def cmd_rollback(s3, args) -> None:
     if target == current:
         raise SystemExit(f"ERROR: {target} is already production.")
     check_git_clean()
+    # The API refuses a release built with other library versions: roll back to one it can serve
+    check_environment(read_manifest(s3, target))
     confirm(target, f"roll production back from {current} to {target}")
 
     old = read_manifest(s3, current)

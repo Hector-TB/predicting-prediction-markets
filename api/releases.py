@@ -73,6 +73,7 @@ def load(name: str | None = None) -> ServingRelease:
         manifest, folder = releases_cli.load_release(s3 or releases_cli.make_client(), name, CACHE_DIR)
         (folder / "manifest.json").write_text(json.dumps(manifest, indent=2) + "\n")
     manifest = json.loads((folder / "manifest.json").read_text())
+    releases_cli.check_environment(manifest)   # its pickles need the versions it was built with
 
     rel = ServingRelease(name, manifest, time_fill(name, manifest))
     for model, entry in manifest["models"].items():

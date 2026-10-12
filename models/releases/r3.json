@@ -1,0 +1,618 @@
+{
+  "release": "r3",
+  "created_at": "2026-10-12T17:10:45+00:00",
+  "promoted_at": "2026-10-12T17:20:38+00:00",
+  "status": "promoted",
+  "parent": "r2",
+  "notes": "v4 retrained with r2's settings under the pinned library versions (scikit-learn 1.9.1, XGBoost 3.4.1, pandas 3.0.6; ADR-019 amendment).",
+  "dataset_version": "v4",
+  "dataset_manifest_sha256": "dedd74a4cddf73139f23b3e448cd97ffc8924baa376820c10f64aa8e764527fb",
+  "code": {
+    "git_commit": "7f788d519aa2030937b846746cab50a665ad088e",
+    "git_branch": "pin-ml-versions",
+    "uncommitted_changes": false
+  },
+  "adrs": [
+    "019",
+    "024"
+  ],
+  "environment": {
+    "scikit-learn": "1.9.1",
+    "xgboost": "3.4.1",
+    "numpy": "2.5.4",
+    "pandas": "3.0.6",
+    "scipy": "1.18.1",
+    "joblib": "1.6.0",
+    "pyarrow": "26.0.0"
+  },
+  "test_set": {
+    "rows": 227280,
+    "markets": 5457,
+    "yes_rate": 0.3889
+  },
+  "market_baseline": {
+    "auc": 0.79281,
+    "pr_auc": 0.73497,
+    "log_loss": 0.5254,
+    "brier": 0.17601
+  },
+  "time_feature_fill": {
+    "days_before_close": 87.23,
+    "pct_lifetime_elapsed": 0.4365,
+    "duration_days": 173.0
+  },
+  "models": {
+    "logistic_regression": {
+      "artifact": "logistic_regression.joblib",
+      "sha256": "d0b45347e5e13f28d435a824514e55f965b1f0368e027e260981eab3705279af",
+      "predictions": "predictions/logistic_regression.csv",
+      "features": [
+        "price_at_snapshot",
+        "price_deviation_from_half",
+        "days_before_close",
+        "pct_lifetime_elapsed",
+        "duration_days",
+        "price_mean_7d",
+        "price_volatility_7d",
+        "price_min_7d",
+        "price_max_7d",
+        "price_change_7d",
+        "price_range_7d",
+        "price_trend_7d",
+        "price_mean_14d",
+        "price_volatility_14d",
+        "price_min_14d",
+        "price_max_14d",
+        "price_change_14d",
+        "price_range_14d",
+        "price_trend_14d",
+        "category"
+      ],
+      "settings": {
+        "clf__C": 0.01,
+        "clf__penalty": "l2",
+        "clf__solver": "lbfgs"
+      },
+      "threshold": 0.349146,
+      "metrics": {
+        "per_snapshot": {
+          "auc": 0.79744,
+          "pr_auc": 0.72741,
+          "log_loss": 0.52925,
+          "brier": 0.17496,
+          "vs_market": {
+            "auc": {
+              "point": 0.00463,
+              "ci_lo": 0.00094,
+              "ci_hi": 0.00822
+            },
+            "log_loss": {
+              "point": 0.00385,
+              "ci_lo": -0.00305,
+              "ci_hi": 0.01099
+            },
+            "brier": {
+              "point": -0.00105,
+              "ci_lo": -0.00288,
+              "ci_hi": 0.00063
+            }
+          }
+        },
+        "per_market": {
+          "auc": 0.85692,
+          "pr_auc": 0.76446,
+          "log_loss": 0.43556,
+          "brier": 0.13977,
+          "vs_market": {
+            "auc": {
+              "point": 0.00549,
+              "ci_lo": 0.00289,
+              "ci_hi": 0.00801
+            },
+            "log_loss": {
+              "point": -0.00489,
+              "ci_lo": -0.00849,
+              "ci_hi": -0.00087
+            },
+            "brier": {
+              "point": -0.00276,
+              "ci_lo": -0.00387,
+              "ci_hi": -0.00165
+            }
+          }
+        }
+      },
+      "calibration": [
+        {
+          "bin": "0.0\u20130.1",
+          "n": 45893,
+          "mean_pred": 0.066,
+          "actual": 0.1032
+        },
+        {
+          "bin": "0.1\u20130.2",
+          "n": 28618,
+          "mean_pred": 0.1534,
+          "actual": 0.1836
+        },
+        {
+          "bin": "0.2\u20130.3",
+          "n": 25112,
+          "mean_pred": 0.2275,
+          "actual": 0.2713
+        },
+        {
+          "bin": "0.3\u20130.4",
+          "n": 17050,
+          "mean_pred": 0.329,
+          "actual": 0.2977
+        },
+        {
+          "bin": "0.4\u20130.5",
+          "n": 41700,
+          "mean_pred": 0.4411,
+          "actual": 0.4119
+        },
+        {
+          "bin": "0.5\u20130.6",
+          "n": 5359,
+          "mean_pred": 0.5565,
+          "actual": 0.5089
+        },
+        {
+          "bin": "0.6\u20130.7",
+          "n": 23345,
+          "mean_pred": 0.6167,
+          "actual": 0.5651
+        },
+        {
+          "bin": "0.7\u20130.8",
+          "n": 22033,
+          "mean_pred": 0.7595,
+          "actual": 0.7494
+        },
+        {
+          "bin": "0.8\u20130.9",
+          "n": 16080,
+          "mean_pred": 0.8559,
+          "actual": 0.9279
+        },
+        {
+          "bin": "0.9\u20131.0",
+          "n": 2090,
+          "mean_pred": 0.9715,
+          "actual": 0.9522
+        }
+      ],
+      "feature_importance": {
+        "price_at_snapshot": 0.641251,
+        "price_deviation_from_half": -0.007025,
+        "days_before_close": 0.269874,
+        "pct_lifetime_elapsed": 0.154678,
+        "duration_days": -0.257531,
+        "price_mean_7d": 0.374685,
+        "price_volatility_7d": -0.046571,
+        "price_min_7d": 0.007883,
+        "price_max_7d": 0.013751,
+        "price_change_7d": 0.032599,
+        "price_range_7d": 0.014495,
+        "price_trend_7d": 0.048869,
+        "price_mean_14d": 0.256345,
+        "price_volatility_14d": -0.148557,
+        "price_min_14d": 0.266795,
+        "price_max_14d": 0.300776,
+        "price_change_14d": 0.040828,
+        "price_range_14d": 0.11854,
+        "price_trend_14d": 0.028506,
+        "category_crypto": 0.003681,
+        "category_entertainment": -0.238824,
+        "category_finance": 0.003076,
+        "category_geopolitics": 0.181747,
+        "category_other": -0.016947,
+        "category_politics_global": 0.209741,
+        "category_politics_us": 0.181815,
+        "category_science_tech": -0.037933,
+        "category_sports": -0.530636
+      }
+    },
+    "gradient_boosting": {
+      "artifact": "gradient_boosting.joblib",
+      "sha256": "9fed1c632a152beb280e738fcb52098bb129361e7e079de8ecc7eff0a9d58791",
+      "predictions": "predictions/gradient_boosting.csv",
+      "features": [
+        "price_at_snapshot",
+        "price_deviation_from_half",
+        "days_before_close",
+        "pct_lifetime_elapsed",
+        "duration_days",
+        "price_mean_7d",
+        "price_volatility_7d",
+        "price_min_7d",
+        "price_max_7d",
+        "price_change_7d",
+        "price_range_7d",
+        "price_trend_7d",
+        "price_mean_14d",
+        "price_volatility_14d",
+        "price_min_14d",
+        "price_max_14d",
+        "price_change_14d",
+        "price_range_14d",
+        "price_trend_14d",
+        "category"
+      ],
+      "settings": {
+        "learning_rate": 0.05,
+        "max_depth": 6,
+        "min_child_weight": 5,
+        "n_estimators": 60
+      },
+      "threshold": 0.33209,
+      "metrics": {
+        "per_snapshot": {
+          "auc": 0.80669,
+          "pr_auc": 0.73995,
+          "log_loss": 0.51911,
+          "brier": 0.17213,
+          "vs_market": {
+            "auc": {
+              "point": 0.01388,
+              "ci_lo": 0.00854,
+              "ci_hi": 0.01894
+            },
+            "log_loss": {
+              "point": -0.0063,
+              "ci_lo": -0.0136,
+              "ci_hi": 0.00116
+            },
+            "brier": {
+              "point": -0.00387,
+              "ci_lo": -0.00627,
+              "ci_hi": -0.00145
+            }
+          }
+        },
+        "per_market": {
+          "auc": 0.86311,
+          "pr_auc": 0.77514,
+          "log_loss": 0.42532,
+          "brier": 0.13725,
+          "vs_market": {
+            "auc": {
+              "point": 0.01167,
+              "ci_lo": 0.0085,
+              "ci_hi": 0.01478
+            },
+            "log_loss": {
+              "point": -0.01513,
+              "ci_lo": -0.01932,
+              "ci_hi": -0.01035
+            },
+            "brier": {
+              "point": -0.00527,
+              "ci_lo": -0.00669,
+              "ci_hi": -0.00367
+            }
+          }
+        }
+      },
+      "calibration": [
+        {
+          "bin": "0.0\u20130.1",
+          "n": 56329,
+          "mean_pred": 0.0559,
+          "actual": 0.0927
+        },
+        {
+          "bin": "0.1\u20130.2",
+          "n": 29549,
+          "mean_pred": 0.1523,
+          "actual": 0.2103
+        },
+        {
+          "bin": "0.2\u20130.3",
+          "n": 15191,
+          "mean_pred": 0.2432,
+          "actual": 0.3131
+        },
+        {
+          "bin": "0.3\u20130.4",
+          "n": 32402,
+          "mean_pred": 0.3489,
+          "actual": 0.3602
+        },
+        {
+          "bin": "0.4\u20130.5",
+          "n": 29672,
+          "mean_pred": 0.4366,
+          "actual": 0.4542
+        },
+        {
+          "bin": "0.5\u20130.6",
+          "n": 1762,
+          "mean_pred": 0.552,
+          "actual": 0.5647
+        },
+        {
+          "bin": "0.6\u20130.7",
+          "n": 17374,
+          "mean_pred": 0.6371,
+          "actual": 0.5587
+        },
+        {
+          "bin": "0.7\u20130.8",
+          "n": 24560,
+          "mean_pred": 0.7328,
+          "actual": 0.7042
+        },
+        {
+          "bin": "0.8\u20130.9",
+          "n": 15311,
+          "mean_pred": 0.8606,
+          "actual": 0.9199
+        },
+        {
+          "bin": "0.9\u20131.0",
+          "n": 5130,
+          "mean_pred": 0.917,
+          "actual": 0.9698
+        }
+      ],
+      "feature_importance": {
+        "price_at_snapshot": 0.155494,
+        "price_deviation_from_half": 0.027243,
+        "days_before_close": 0.00633,
+        "pct_lifetime_elapsed": 0.005082,
+        "duration_days": 0.005649,
+        "price_mean_7d": 0.027705,
+        "price_volatility_7d": 0.003569,
+        "price_min_7d": 0.075867,
+        "price_max_7d": 0.521995,
+        "price_change_7d": 0.012937,
+        "price_range_7d": 0.003792,
+        "price_trend_7d": 0.007519,
+        "price_mean_14d": 0.004966,
+        "price_volatility_14d": 0.004938,
+        "price_min_14d": 0.029911,
+        "price_max_14d": 0.041578,
+        "price_change_14d": 0.005259,
+        "price_range_14d": 0.005663,
+        "price_trend_14d": 0.002083,
+        "category_crypto": 0.002196,
+        "category_entertainment": 0.009896,
+        "category_finance": 0.003744,
+        "category_geopolitics": 0.001669,
+        "category_other": 0.003293,
+        "category_politics_global": 0.005118,
+        "category_politics_us": 0.005649,
+        "category_science_tech": 0.000984,
+        "category_sports": 0.01987
+      }
+    },
+    "random_forest": {
+      "artifact": "random_forest.joblib",
+      "sha256": "a209eae3c2b2423d0d9bfb5d3805c2a2b3b3513b68327216db0578b6bd9b613e",
+      "predictions": "predictions/random_forest.csv",
+      "features": [
+        "price_at_snapshot",
+        "price_deviation_from_half",
+        "price_mean_7d",
+        "price_volatility_7d",
+        "price_min_7d",
+        "price_max_7d",
+        "price_change_7d",
+        "price_range_7d",
+        "price_trend_7d",
+        "price_mean_14d",
+        "price_volatility_14d",
+        "price_min_14d",
+        "price_max_14d",
+        "price_change_14d",
+        "price_range_14d",
+        "price_trend_14d",
+        "pct_lifetime_elapsed",
+        "days_before_close",
+        "duration_days",
+        "category_encoded"
+      ],
+      "settings": {
+        "max_depth": 8,
+        "min_samples_leaf": 50
+      },
+      "threshold": 0.378472,
+      "metrics": {
+        "per_snapshot": {
+          "auc": 0.80568,
+          "pr_auc": 0.73387,
+          "log_loss": 0.52044,
+          "brier": 0.17262,
+          "vs_market": {
+            "auc": {
+              "point": 0.01287,
+              "ci_lo": 0.00793,
+              "ci_hi": 0.01737
+            },
+            "log_loss": {
+              "point": -0.00496,
+              "ci_lo": -0.01232,
+              "ci_hi": 0.00249
+            },
+            "brier": {
+              "point": -0.00338,
+              "ci_lo": -0.00574,
+              "ci_hi": -0.00116
+            }
+          }
+        },
+        "per_market": {
+          "auc": 0.86315,
+          "pr_auc": 0.77006,
+          "log_loss": 0.42589,
+          "brier": 0.13752,
+          "vs_market": {
+            "auc": {
+              "point": 0.01171,
+              "ci_lo": 0.00853,
+              "ci_hi": 0.01487
+            },
+            "log_loss": {
+              "point": -0.01456,
+              "ci_lo": -0.01899,
+              "ci_hi": -0.00975
+            },
+            "brier": {
+              "point": -0.00501,
+              "ci_lo": -0.00637,
+              "ci_hi": -0.00352
+            }
+          }
+        }
+      },
+      "calibration": [
+        {
+          "bin": "0.0\u20130.1",
+          "n": 52634,
+          "mean_pred": 0.0533,
+          "actual": 0.0871
+        },
+        {
+          "bin": "0.1\u20130.2",
+          "n": 22609,
+          "mean_pred": 0.1329,
+          "actual": 0.1965
+        },
+        {
+          "bin": "0.2\u20130.3",
+          "n": 31545,
+          "mean_pred": 0.237,
+          "actual": 0.2929
+        },
+        {
+          "bin": "0.3\u20130.4",
+          "n": 25317,
+          "mean_pred": 0.3713,
+          "actual": 0.3661
+        },
+        {
+          "bin": "0.4\u20130.5",
+          "n": 29124,
+          "mean_pred": 0.4353,
+          "actual": 0.4389
+        },
+        {
+          "bin": "0.5\u20130.6",
+          "n": 6794,
+          "mean_pred": 0.5227,
+          "actual": 0.5634
+        },
+        {
+          "bin": "0.6\u20130.7",
+          "n": 15816,
+          "mean_pred": 0.6422,
+          "actual": 0.5639
+        },
+        {
+          "bin": "0.7\u20130.8",
+          "n": 23860,
+          "mean_pred": 0.7447,
+          "actual": 0.7141
+        },
+        {
+          "bin": "0.8\u20130.9",
+          "n": 15496,
+          "mean_pred": 0.8609,
+          "actual": 0.9233
+        },
+        {
+          "bin": "0.9\u20131.0",
+          "n": 4085,
+          "mean_pred": 0.9296,
+          "actual": 0.9758
+        }
+      ],
+      "feature_importance": {
+        "price_at_snapshot": 0.158408,
+        "price_deviation_from_half": 0.034326,
+        "price_mean_7d": 0.105614,
+        "price_volatility_7d": 0.001821,
+        "price_min_7d": 0.114172,
+        "price_max_7d": 0.221843,
+        "price_change_7d": 0.004706,
+        "price_range_7d": 0.002708,
+        "price_trend_7d": 0.003073,
+        "price_mean_14d": 0.086647,
+        "price_volatility_14d": 0.002264,
+        "price_min_14d": 0.077003,
+        "price_max_14d": 0.15176,
+        "price_change_14d": 0.007823,
+        "price_range_14d": 0.003893,
+        "price_trend_14d": 0.003369,
+        "pct_lifetime_elapsed": 0.002315,
+        "days_before_close": 0.004464,
+        "duration_days": 0.005758,
+        "category_encoded": 0.008034
+      }
+    }
+  },
+  "checks": {
+    "against": "r2",
+    "at": "2026-10-12T17:20:15+00:00",
+    "passed": true,
+    "models": {
+      "logistic_regression": {
+        "fails": [],
+        "warnings": [],
+        "auc_diff": {
+          "point": 0.0,
+          "ci_lo": 0.0,
+          "ci_hi": 0.0
+        },
+        "log_loss_diff": {
+          "point": -0.0,
+          "ci_lo": -0.0,
+          "ci_hi": 0.0
+        },
+        "ece": [
+          0.03651,
+          0.03651
+        ]
+      },
+      "gradient_boosting": {
+        "fails": [],
+        "warnings": [],
+        "auc_diff": {
+          "point": -0.00046,
+          "ci_lo": -0.00101,
+          "ci_hi": 6e-05
+        },
+        "log_loss_diff": {
+          "point": 0.00022,
+          "ci_lo": -0.00074,
+          "ci_hi": 0.00124
+        },
+        "ece": [
+          0.0425,
+          0.03959
+        ]
+      },
+      "random_forest": {
+        "fails": [],
+        "warnings": [],
+        "auc_diff": {
+          "point": 9e-05,
+          "ci_lo": -0.00031,
+          "ci_hi": 0.00045
+        },
+        "log_loss_diff": {
+          "point": 8e-05,
+          "ci_lo": -0.00041,
+          "ci_hi": 0.00055
+        },
+        "ece": [
+          0.03763,
+          0.03792
+        ]
+      }
+    }
+  }
+}
