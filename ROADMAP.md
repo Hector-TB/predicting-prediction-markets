@@ -88,7 +88,7 @@ Build order:
   - `GET /track-record` (`api/track_record.py`): backtest per-market metrics + live metrics per release, sample vs search, first prediction per market vs Gamma's price at the lookup, market-bootstrap CIs, length-weighted (1 / eligible days) and by duration; counts only under 100 resolved markets
   - `.github/workflows/live-track-record.yml`: daily 06:17 UTC + manual run
 - [x] Secrets set (`gh secret set -f .env`) and first run by hand ✓ 2026-10-12 (run 38301616617, 3 min): 20 sampled markets stored with r3 (60 predictions), 0 skipped; 8,549 eligible of 17,447 open
-- [ ] Workflow upkeep: GitHub warns that `actions/checkout@v4` / `setup-python@v5` run on deprecated Node 20, and `ubuntu-latest` moves to Ubuntu 26 from 2026-10-19: bump the action versions and check the next runs
+- [x] Workflow upkeep ✓ 2026-10-12: `actions/checkout@v7` / `setup-python@v7` (Node 24; v4/v5 ran on deprecated Node 20), runner pinned to `ubuntu-24.04` (`ubuntu-latest` moves to 26 from 2026-10-19: upgrade deliberately, like the library pins)
 - [ ] Least-privilege AWS key for the workflow (read-only on `models/`); the repo secret is the full `.env` key today
 - [ ] First live numbers: ~100 resolved sampled markets (months); a firm answer at ~1,000 (±0.010 AUC, ADR-026)
 - [ ] Track-record page in the React site (step 7)

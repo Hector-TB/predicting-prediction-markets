@@ -16,7 +16,7 @@ concurrency:
 
 jobs:
   daily:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04     # pinned: ubuntu-latest moves to 26 from 2026-10-19; upgrade deliberately
     timeout-minutes: 30
     env:
       DATABASE_URL: ${{ secrets.DATABASE_URL }}
@@ -26,8 +26,8 @@ jobs:
       S3_BUCKET: ${{ secrets.S3_BUCKET }}
       ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
         with:
           python-version: "3.13"
           cache: pip
