@@ -18,7 +18,7 @@ The course paper (research questions, methods, reported results) is `docs/paper/
 
 ## Current state (as of 2026-10-09)
 
-Dataset versions on S3 (ADR-016, manifests in `data/manifests/`): **v1** = the course paper's data; **v2** = full re-fetch + leakage filter + split by resolution time (ADR-013/014/021); **v3** = v2 without the 14-day pre-close cutoff, metadata matched to Gamma (ADR-022/023); **v4 (LATEST)** = v3 + 769 markets from the first incremental refresh (2026-10-02, cutoff T = 2026-07-02 15:09 UTC; not yet trained into a release or loaded into Supabase). Local `data/` holds v4.
+Dataset versions on S3 (ADR-016, manifests in `data/manifests/`): **v1** = the course paper's data; **v2** = full re-fetch + leakage filter + split by resolution time (ADR-013/014/021); **v3** = v2 without the 14-day pre-close cutoff, metadata matched to Gamma (ADR-022/023); **v4 (LATEST)** = v3 + 769 markets from the first incremental refresh (2026-10-02, cutoff T = 2026-07-02 15:09 UTC; trained into candidate r2, not yet loaded into Supabase). Local `data/` holds v4.
 
 - v3: 45,130 markets; 2,534,852 clean snapshots (train 2,038,895 / 23,120 markets; test 196,977 / 4,924; `test_pre_cutoff` 298,980 unused); cutoff T = 2026-07-01 07:11 UTC. Coverage check: 0 markets missed; full quality check passed
 - LR, XGBoost and RF trained on v3 under one protocol (ADR-024, `models/common/training.py`); re-score in `docs/paper/rescore_v3_data.md`. v2 won't be trained (superseded by v3)
@@ -36,7 +36,7 @@ Dataset versions on S3 (ADR-016, manifests in `data/manifests/`): **v1** = the c
 2. **Re-score** ✓ `docs/paper/rescore_v3_data.md`: XGBoost/RF beat the market (ΔAUC ≈ +0.014 [+0.009, +0.020]; per-market-weighted ΔAUC +0.011, Δlog-loss −0.013, both CIs clear of zero; LR ≈ market). The edge is ≥ 30 days before close, also within markets of the same length; none in markets > 1 year. Trading survives a 2¢/token cost, but fills at the recorded price are unverified. README results updated (v3 table first, the paper's v1 table kept as published).
 3. ~~**Refresh Supabase**~~ ✓ 2026-09-29.
 4. ~~**Merge** → `main`~~ ✓ PR #1, 2026-09-29.
-5. **One-command refresh** (ROADMAP step 4, branch `one-command-refresh`): the first real refresh published **v4** on 2026-10-02 (769 new markets), then stopped mid-training (RF). **Paused 2026-10-09**: r1 stays production. Finish later with `caffeinate -i python3 scripts/refresh.py --resume` (~25 min) → candidate `r2` + report. Remaining step-4 items (migration 005, loader pruning, incremental-build retries) are in ROADMAP.
+5. **One-command refresh** (ROADMAP step 4, branch `one-command-refresh`): the first real refresh published **v4** on 2026-10-02 (769 new markets), and finished on 2026-10-12: candidate **r2** (v4), verdict PASS (`models/releases/r2_report.md`). r1 stays production until you decide: `python scripts/release.py promote r2` (or `reject r2`). Remaining step-4 items (migration 005, loader pruning, incremental-build retries) are in ROADMAP.
 6. **Now: API + site** (ROADMAP 5–7). Order: shared per-snapshot feature function + parity test vs training snapshots → `/predict` endDate decision (ADR) → FastAPI (`/resolve`, `/predict`, then `/track-record` + daily resolution job) → React. Unscheduled work (walk-forward backtest, Trends rework, volume to date, realistic fills, cloud runner) is under *Parked* in ROADMAP.md.
 
 ## Key conventions
