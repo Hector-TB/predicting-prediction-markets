@@ -6,6 +6,7 @@ FastAPI app (ADR-017)
     GET /health                 release being served
     GET /resolve?q=             URL / slug / condition ID / text → markets
     GET /predict?market_id=     every production model's P(YES) as of now, with warnings (ADR-025)
+    GET /track-record           backtest + live metrics per release, sample vs search (ADR-026)
 
 The release is the S3 PRODUCTION pointer unless $RELEASE names one. Every
 prediction is stored (api/store.py, migrations 005 + 006); if the database is
@@ -14,6 +15,7 @@ unreachable the prediction is still returned, with "stored": false.
 
 import logging
 import os
+import time
 from contextlib import asynccontextmanager
 
 from dotenv import load_dotenv
@@ -22,7 +24,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
 from api import ROOT, gamma
-from api import releases, store
+from api import releases, store, track_record
 from api.predict import PredictError, predict
 from features import FetchError
 
@@ -30,6 +32,8 @@ load_dotenv(ROOT / ".env")
 log = logging.getLogger(__name__)
 
 ERROR_STATUS = {"not_found": 404}
+TRACK_RECORD_TTL = 3600   # seconds; outcomes change once a day (resolve_lookups.py)
+_track_record: dict = {}
 
 
 @asynccontextmanager
@@ -84,3 +88,20 @@ def predict_market(market_id: str = Query(..., pattern=gamma.CONDITION_ID.patter
         log.error("lookup of %s NOT stored: %s", market_id, e)
         result["stored"] = False
     return result
+
+
+@app.get("/track-record")
+def get_track_record():
+    cached = _track_record.get("value")
+    if cached and time.monotonic() - _track_record["at"] < TRACK_RECORD_TTL:
+        return cached
+    try:
+        with store.connect() as conn, conn.cursor() as cur:
+            wide, backtest = track_record.load(cur)
+        conn.close()
+    except Exception as e:
+        log.error("track record: %s", e)
+        return error(503, "database", "The track record is unavailable right now.")
+    value = track_record.score(wide, backtest)
+    _track_record.update(value=value, at=time.monotonic())
+    return value

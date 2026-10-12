@@ -1,0 +1,41 @@
+# Live track record (ADR-026): record outcomes of open looked-up / sampled markets, then
+# predict and store today's random sample of 20 training-like open markets.
+# Secrets (repo Settings → Secrets and variables → Actions): DATABASE_URL (Supabase session
+# pooler), AWS_ACCESS_KEY_ID, AWS_SECRET_ACCESS_KEY, AWS_REGION, S3_BUCKET, ANTHROPIC_API_KEY.
+# The repo is public, so these logs are too: secrets are masked, market IDs are visible.
+name: Live track record
+
+on:
+  schedule:
+    - cron: "17 6 * * *"     # daily, 06:17 UTC
+  workflow_dispatch:         # run by hand from the Actions tab
+
+concurrency:
+  group: live-track-record
+  cancel-in-progress: false
+
+jobs:
+  daily:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      DATABASE_URL: ${{ secrets.DATABASE_URL }}
+      AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
+      AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+      AWS_REGION: ${{ secrets.AWS_REGION }}
+      S3_BUCKET: ${{ secrets.S3_BUCKET }}
+      ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+          cache: pip
+          cache-dependency-path: pyproject.toml
+      - name: Install (pinned library versions, ADR-019 amendment)
+        run: pip install -e .
+      - name: Record outcomes
+        run: python scripts/resolve_lookups.py
+      - name: Daily random sample
+        if: success() || failure()     # sample even if Gamma failed for the resolution step
+        run: python scripts/sample_markets.py
