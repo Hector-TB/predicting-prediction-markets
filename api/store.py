@@ -47,8 +47,8 @@ def model_run_ids(cur, release: ServingRelease) -> dict[str, int]:
     return ids
 
 
-def save_lookup(result: dict, market: Market, release: ServingRelease) -> int:
-    """Store one lookup; returns the snapshot id."""
+def save_lookup(result: dict, market: Market, release: ServingRelease, source: str = "search") -> int:
+    """Store one lookup; returns the snapshot id. `source`: 'search' (a user) or 'sample' (ADR-026)."""
     feats = result["features"]
     with connect() as conn, conn.cursor() as cur:
         runs = model_run_ids(cur, release)
@@ -66,12 +66,12 @@ def save_lookup(result: dict, market: Market, release: ServingRelease) -> int:
              market.slug, market.start, market.end, market.duration_days))
         cur.execute(
             f"""INSERT INTO snapshots (market_id, snapshot_timestamp, {", ".join(TYPED)}, features,
-                                       warnings, market_price, end_date_seen, volume_to_date, release)
-                VALUES (%s, %s, {", ".join(["%s"] * len(TYPED))}, %s::jsonb, %s::jsonb, %s, %s, %s, %s)
+                                       warnings, market_price, end_date_seen, volume_to_date, release, source)
+                VALUES (%s, %s, {", ".join(["%s"] * len(TYPED))}, %s::jsonb, %s::jsonb, %s, %s, %s, %s, %s)
                 RETURNING id""",
             (market.market_id, result["as_of"], *[feats[c] for c in TYPED], json.dumps(feats),
              json.dumps([w["code"] for w in result["warnings"]]), market.price, market.end_raw,
-             market.volume, release.name))
+             market.volume, release.name, source))
         snapshot_id = cur.fetchone()[0]
         for p in result["predictions"]:
             cur.execute("INSERT INTO predictions (snapshot_id, model_run_id, probability) VALUES (%s, %s, %s)",

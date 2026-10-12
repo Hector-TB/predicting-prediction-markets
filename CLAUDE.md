@@ -37,7 +37,7 @@ Dataset versions on S3 (ADR-016, manifests in `data/manifests/`): **v1** = the c
 3. ~~**Refresh Supabase**~~ ✓ 2026-09-29.
 4. ~~**Merge** → `main`~~ ✓ PR #1, 2026-09-29.
 5. **One-command refresh** (ROADMAP step 4, merged in PR #3): the first real refresh published **v4** on 2026-10-02 (769 new markets), and finished on 2026-10-12: candidate **r2** (v4), verdict PASS (`models/releases/r2_report.md`), promoted 2026-10-12, then replaced the same day by **r3** (same data and settings, built under the pinned library versions after r2's artifacts failed to load on the new machine; ADR-019 amendment; report `models/releases/r3_report.md`). Remaining step-4 items (loader pruning, incremental-build retries) are in ROADMAP.
-6. **Now: API + site** (ROADMAP 5–7). Order: shared per-snapshot feature function + parity test vs training snapshots → `/predict` endDate decision (ADR) → FastAPI (`/resolve`, `/predict`, then `/track-record` + daily resolution job) → React. Unscheduled work (walk-forward backtest, Trends rework, volume to date, realistic fills, cloud runner) is under *Parked* in ROADMAP.md.
+6. **Now: API + site** (ROADMAP 5–7). Order: shared per-snapshot feature function + parity test vs training snapshots → `/predict` endDate decision (ADR) → FastAPI (`/resolve`, `/predict`, `/track-record` + daily resolution job and random sample, ADR-026, GitHub Actions) → React. Unscheduled work (walk-forward backtest, Trends rework, volume to date, realistic fills, cloud runner) is under *Parked* in ROADMAP.md.
 
 ## Key conventions
 
@@ -128,3 +128,4 @@ Dataset versions on S3 (ADR-016, manifests in `data/manifests/`): **v1** = the c
 - ADR-023: meta must match Gamma — no estimated/placeholder values; fresh fetch wins on merge (category/split kept); `meta_checks.py` blocks pipeline/build/publish; repair with `scripts/refresh_meta.py`; the evidence (`data/fetch_cache/`) is on S3: `sync.py evidence pull` on a new machine
 - ADR-024: one training protocol for all models — time-ordered holdout, one weight per market, calibration + threshold from the holdout (supersedes ADR-021 decisions 2–3)
 - ADR-025: always predict an open binary market; missing/odd inputs filled for the models only (no endDate → training medians, past endDate → 0 days left) and flagged with warning codes
+- ADR-026: live track record — daily random sample of 20 training-like open markets (`source='sample'`) + daily resolution job (ADR-004 rule) + `/track-record` (first prediction per market vs Gamma price, sample is the headline, length-weighted); GitHub Actions daily

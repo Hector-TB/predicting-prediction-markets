@@ -6,7 +6,6 @@ import time
 from typing import Optional
 
 import requests
-
 from fetch_markets import parse_json_field
 
 log = logging.getLogger(__name__)
@@ -14,6 +13,7 @@ log = logging.getLogger(__name__)
 GAMMA_URL   = "https://gamma-api.polymarket.com"
 MAX_RETRIES = 3
 TIMEOUT     = 15
+BATCH       = 100     # Gamma's page cap (condition IDs per call, markets per page)
 
 CONDITION_ID = re.compile(r"^0x[0-9a-fA-F]{64}$")
 # polymarket.com/event/<event>[/<market>] or /market/<market>, with an optional locale prefix
@@ -46,6 +46,28 @@ def market_by_condition_id(condition_id: str) -> Optional[dict]:
         if found:
             return found[0]
     return None
+
+
+def closed_markets(condition_ids: list[str]) -> list[dict]:
+    """The markets among `condition_ids` that have closed (up to BATCH ids per call)."""
+    found = []
+    for i in range(0, len(condition_ids), BATCH):
+        found += _get("/markets", {"condition_ids": condition_ids[i:i + BATCH], "closed": "true",
+                                   "limit": BATCH})
+    return found
+
+
+def open_markets(**params) -> list[dict]:
+    """Every open market matching the Gamma filters in `params` (keyset pagination, ADR-013)."""
+    markets, cursor = [], None
+    while True:
+        page = _get("/markets/keyset", {"closed": "false", "limit": BATCH, **params,
+                                         **({"after_cursor": cursor} if cursor else {})})
+        batch = page.get("markets") or []
+        markets += batch
+        cursor = page.get("next_cursor")
+        if not batch or not cursor:
+            return markets
 
 
 def market_by_slug(slug: str) -> Optional[dict]:
