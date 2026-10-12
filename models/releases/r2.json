@@ -1,8 +1,8 @@
 {
   "release": "r2",
   "created_at": "2026-10-12T12:49:53+00:00",
-  "promoted_at": null,
-  "status": "candidate",
+  "promoted_at": "2026-10-12T16:09:58+00:00",
+  "status": "promoted",
   "parent": "r1",
   "notes": "Refresh 20260930_014318: v4 (+769 markets), r1's settings.",
   "dataset_version": "v4",
