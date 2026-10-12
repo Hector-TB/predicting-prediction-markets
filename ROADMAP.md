@@ -87,7 +87,9 @@ Build order:
   - `scripts/sample_markets.py`: daily random sample of 20 training-like open markets (8,552 eligible of 17,496 open on 2026-10-12), stored with `source = 'sample'`; draw seeded by the date
   - `GET /track-record` (`api/track_record.py`): backtest per-market metrics + live metrics per release, sample vs search, first prediction per market vs Gamma's price at the lookup, market-bootstrap CIs, length-weighted (1 / eligible days) and by duration; counts only under 100 resolved markets
   - `.github/workflows/live-track-record.yml`: daily 06:17 UTC + manual run
-- [ ] Add the six repo secrets, trigger the workflow by hand once, check the rows in Supabase
+- [x] Secrets set (`gh secret set -f .env`) and first run by hand ✓ 2026-10-12 (run 38301616617, 3 min): 20 sampled markets stored with r3 (60 predictions), 0 skipped; 8,549 eligible of 17,447 open
+- [ ] Workflow upkeep: GitHub warns that `actions/checkout@v4` / `setup-python@v5` run on deprecated Node 20, and `ubuntu-latest` moves to Ubuntu 26 from 2026-10-19: bump the action versions and check the next runs
+- [ ] Least-privilege AWS key for the workflow (read-only on `models/`); the repo secret is the full `.env` key today
 - [ ] First live numbers: ~100 resolved sampled markets (months); a firm answer at ~1,000 (±0.010 AUC, ADR-026)
 - [ ] Track-record page in the React site (step 7)
 
@@ -128,6 +130,7 @@ Search → market detail page (the production models + gap, prediction history, 
 - **Test other rolling windows (ADR-003 was never searched exhaustively).** Price history is fetched at `fidelity=720` (one point per 12 h), so a 3d window has 6 points and anything under 1 day is impossible without a finer re-fetch. XGBoost (r1) puts ~57% of its gain on 7d features and ~15% on 14d, almost all of it on min/max; the volatility/trend/change features get < 2% together. Try adding 3d (and maybe 30d), and dropping the unused stats; keep it only if the holdout AUC improves (ADR-024). Needs a snapshot rebuild → new dataset version + ADR. Suggested 2026-10-01.
 - **Realistic trading fills.** The trading simulation assumes fills at the recorded price. Large model–market gaps are probably more common in thin markets, where that price may be a stale last trade. Needs order-book / spread history.
 - **Incremental merge and leakage steps.** They rewrite the whole parquet each run (~20–40 min). Only if it becomes a problem.
+- **Isotonic calibration plateaus.** The first live sample shows XGBoost giving the same probability to unrelated markets (0.064 ×3, 0.240 ×4, 0.421 ×2): isotonic calibration maps scores onto a step function, so markets on one step are tied and can't be ranked against each other. Measure how many distinct values each release outputs on the test set and what the ties cost in AUC; compare with Platt/sigmoid or a finer isotonic fit on the holdout (ADR-024). Seen 2026-10-12.
 - **Clean-up** (no rush):
   - `data/polymarket_ml_dataset.v2.csv`, `data/*.bak.csv`, `data/*_part[12]*.parquet`.
 
